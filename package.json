@@ -1,0 +1,51 @@
+{
+  "name": "pi-main-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Engineering-lead planning agent launcher for Pi: grilling, issue publishing, delegation, project memory, and session handoffs.",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Firoar/pi-main-agent.git"
+  },
+  "homepage": "https://github.com/Firoar/pi-main-agent",
+  "bugs": {
+    "url": "https://github.com/Firoar/pi-main-agent/issues"
+  },
+  "keywords": [
+    "pi",
+    "pi-coding-agent",
+    "agent",
+    "planning",
+    "grilling",
+    "wayfinder",
+    "memory",
+    "handoff",
+    "subagents"
+  ],
+  "bin": {
+    "pi-main": "./bin/pi-main.mjs"
+  },
+  "files": [
+    "bin",
+    "extensions",
+    "prompts",
+    "skills",
+    "pi-main.config.json",
+    "install.sh",
+    "README.md",
+    "LICENSE",
+    "ATTRIBUTION.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md"
+  ],
+  "scripts": {
+    "test": "node --test --experimental-strip-types tests/lib.test.mjs tests/wrapper.test.mjs",
+    "smoke": "PI_MAIN_DRY_RUN=1 node bin/pi-main.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}

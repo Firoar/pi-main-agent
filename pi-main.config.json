@@ -1,0 +1,50 @@
+{
+  "extensions": [],
+  "skills": [
+    "grilling",
+    "domain-modeling",
+    "grill-with-docs",
+    "setup-matt-pocock-skills",
+    "to-spec",
+    "to-tickets",
+    "wayfinder",
+    "research",
+    "prototype",
+    "handoff"
+  ],
+  "tracker": {
+    "provider": "github",
+    "localDir": ".scratch",
+    "allowedTools": []
+  },
+  "guard": {
+    "allowedWritePaths": [
+      "GLOSSARY.md",
+      "GLOSSARY-MAP.md",
+      "AGENTS.md",
+      "CLAUDE.md",
+      "docs/**",
+      ".scratch/**",
+      "plans/**",
+      "specs/**",
+      ".pi-main/tmp/**",
+      ".pi-main/handoffs/**"
+    ],
+    "bash": "read-only",
+    "allowGithubTrackerWrites": true,
+    "allowGhApi": false
+  },
+  "memory": {
+    "dir": ".pi-main/memory",
+    "maxChars": 3000,
+    "dailyMaxChars": 1500,
+    "openMaxChars": 1500
+  },
+  "handoff": {
+    "dir": ".pi-main/handoffs",
+    "warnAt": 0.7,
+    "hardWarnAt": 0.85
+  },
+  "model": null,
+  "thinking": null
+}
