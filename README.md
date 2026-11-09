@@ -98,6 +98,52 @@ When `ask_user_question` is available, bounded rounds use the structured questio
 | `/main-status` | Show project, memory, tracker, delegation tools, context usage |
 | `/skill:grilling` | Force the interview skill |
 | `/skill:wayfinder` | Force the Wayfinder flow for a large effort |
+| `pi-main add <source>` | Add a trusted extension source to the user config |
+| `pi-main remove <source>` | Remove a trusted extension source |
+| `pi-main list` | List configured extension sources |
+
+## Managing extensions
+
+`pi-main` keeps its extension list in the trusted user config:
+
+```text
+~/.config/pi-main/config.json
+```
+
+Add a local checkout, npm package, git source, or URL:
+
+```bash
+pi-main add /home/drc_xor/Desktop/code/pi-personal-herdr-agents
+pi-main add npm:some-pi-extension
+pi-main add git:github.com/example/pi-extension
+pi-main list
+```
+
+Remove one:
+
+```bash
+pi-main remove /home/drc_xor/Desktop/code/pi-personal-herdr-agents
+```
+
+Preview without writing:
+
+```bash
+pi-main add --dry-run /path/to/extension
+```
+
+Behavior:
+
+- writes only the trusted user config, or the file passed with `--config`
+- uses `PI_MAIN_CONFIG` when set
+- never writes project config or global Pi settings
+- never runs `pi install`
+- does not execute the extension during `add`
+- requires local paths to exist and stores canonical paths
+- deduplicates equivalent sources
+- preserves unrelated config keys
+- writes atomically with mode `0600`
+
+Do not add `pi-personal-herdr-agents` to a repo config. Extension paths are trusted user configuration so a cloned repo cannot inject code.
 
 ## Context handoff
 
@@ -175,21 +221,19 @@ Setup persists only `provider`, `localDir`, and `mcpServer` in project config. I
 
 ## Delegation
 
-No delegation extension is hardcoded. Orchestration is a lead protocol over an installed executor; pi-main does not provide a built-in scheduler or job engine. It loads your normal global extensions, plus any paths in `extensions`:
+No delegation extension is hardcoded. Orchestration is a lead protocol over an installed executor; pi-main does not provide a built-in scheduler or job engine. It loads your normal global extensions, plus any sources added with `pi-main add`:
 
-```json
-{
-  "extensions": [
-    "/home/you/code/pi-herdr-agents"
-  ]
-}
+```bash
+pi-main add /home/you/code/pi-herdr-agents
 ```
 
 Examples:
 
-- inside Herdr: point at `pi-personal-herdr-agents` or `pi-herdr-agents`
-- outside Herdr: point at `pi-interactive-subagents` or `pi-subagents`
+- inside Herdr: add `pi-personal-herdr-agents` or `pi-herdr-agents`
+- outside Herdr: add `pi-interactive-subagents` or `pi-subagents`
 - or use any extension that exposes a `subagent` / `delegate` tool
+
+Do not load two subagent extensions at once; they register the same `subagent` tool.
 
 If no delegation tool is available, the lead leaves the confirmed plan as a handoff instead of pretending to implement. The package's orchestration protocol covers assignment, concurrency, retry, verification, and resume rules.
 
