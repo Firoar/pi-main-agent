@@ -1,6 +1,6 @@
 # ADR Format
 
-ADRs live in `docs/adr/` and use sequential numbering: `0001-slug.md`, `0002-slug.md`, etc.
+System-wide ADRs live in `docs/adr/`; context-specific ADRs live in `docs/domains/<context>/adr/`. Use sequential numbering within each directory: `0001-slug.md`, `0002-slug.md`, etc.
 
 Create the `docs/adr/` directory lazily: only when the first ADR is needed.
 
@@ -24,7 +24,7 @@ Only include these when they add genuine value. Most ADRs won't need them.
 
 ## Numbering
 
-Scan `docs/adr/` for the highest existing number and increment by one.
+Scan the target ADR directory for the highest existing number and increment by one. Do not move or overwrite established ADRs during setup; preserve their paths and include them in the context map or repository domain guide. A consolidation is a separate migration for the user or a delegated worker.
 
 ## When to offer an ADR
 

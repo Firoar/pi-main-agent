@@ -6,9 +6,11 @@ How the engineering skills should consume this repo's domain documentation when 
 
 - **`GLOSSARY.md`** at the repo root, or
 - **`GLOSSARY-MAP.md`** at the repo root if it exists: it points at one `GLOSSARY.md` per context. Read each one relevant to the topic.
-- **`docs/adr/`**: read ADRs that touch the area you're about to work in. In multi-context repos, also check `src/<context>/docs/adr/` for context-scoped decisions.
+- **`docs/adr/`**: read system-wide ADRs that touch the area you're about to work in.
+- **`docs/domains/<context>/`**: when `GLOSSARY-MAP.md` points here, read the relevant context glossary and ADRs.
+- **Established domain docs**: read existing context glossaries and ADRs where the repo already keeps them, including under `src/`. Preserve their locations and map them; do not overwrite or move them as part of setup. If consolidation is desired, propose a specific migration for the user or a delegated worker.
 
-If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/skill:domain-modeling` skill (reached via `/skill:grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
+If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/skill:domain-modeling` skill creates files lazily when terms or decisions actually get resolved. Follow paths in the map; the presence of a context map does not authorize moving existing docs.
 
 ## File structure
 
@@ -17,9 +19,8 @@ Single-context repo (most repos):
 ```
 /
 ├── GLOSSARY.md
-├── docs/adr/
-│   ├── 0001-event-sourced-orders.md
-│   └── 0002-postgres-for-write-model.md
+├── docs/adr/                         ← system-wide ADRs
+│   └── 0001-platform-decision.md
 └── src/
 ```
 
@@ -29,13 +30,13 @@ Multi-context repo (presence of `GLOSSARY-MAP.md` at the root):
 /
 ├── GLOSSARY-MAP.md
 ├── docs/adr/                          ← system-wide decisions
-└── src/
+└── docs/domains/
     ├── ordering/
     │   ├── GLOSSARY.md
-    │   └── docs/adr/                  ← context-specific decisions
+    │   └── adr/
     └── billing/
         ├── GLOSSARY.md
-        └── docs/adr/
+        └── adr/
 ```
 
 ## Use the glossary's vocabulary

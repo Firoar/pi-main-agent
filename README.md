@@ -4,8 +4,8 @@
 
 A launcher for **Pi** that turns it into an engineering-lead planning agent:
 
-- interviews you with Matt Pocock's grilling / domain-modeling workflow
-- publishes confirmed requirements to GitHub issues (or local markdown)
+- uses focused clarification for clear tasks and Matt Pocock's grilling / domain-modeling workflow when decisions remain
+- publishes confirmed requirements to the configured GitHub, local, or MCP tracker
 - delegates implementation, research, and prototypes to worker subagents
 - keeps a small project-local memory
 - writes handoff files so a fresh main agent can continue when context fills
@@ -15,9 +15,10 @@ It is intentionally **not** installed globally as a Pi package. Only sessions st
 ## Requirements
 
 - Pi 1.5+ on `PATH`
-- Node.js 22+
+- Node.js 22.19+
 - `git`
 - `gh` for the default GitHub tracker (authenticated with `gh auth login`)
+- optional: `@juicesharp/rpiv-ask-user-question` for structured grilling questionnaires; without it, the lead uses numbered chat questions
 - optional: a delegation extension such as `pi-subagents`, `pi-herdr-agents`, or your own
 
 `gh` 2.94+ gives native sub-issues and blocking edges; the tracker helper uses them automatically. Older versions fall back to `Part of #...` and `Blocked by: #...` lines in the issue body.
@@ -47,21 +48,21 @@ cd your-repo
 pi-main
 ```
 
-The first time in a repo, run the one-time setup:
+The runtime default tracker is GitHub. The first time in a repo, run the one-time setup to choose and persist the provider:
 
 ```text
 /skill:setup-matt-pocock-skills
 ```
 
-Choose GitHub (recommended) or local markdown as the tracker. The setup writes:
+Choose GitHub, local markdown, or an already configured MCP issue server. GitHub is recommended when the repo has a GitHub remote; otherwise setup recommends local markdown. Setup previews the selected settings and asks for confirmation before changing tracker configuration or writing setup files. It writes:
 
 - `docs/agents/issue-tracker.md`
 - `docs/agents/domain.md`
-- an `## Agent skills` block in `AGENTS.md` or `CLAUDE.md`
+- an `## Agent skills` block in the first applicable Pi instruction file
 
-It also creates the Wayfinder labels when GitHub is used.
+When GitHub is selected, `tracker_configure` bootstraps the `ready-for-agent` and required Wayfinder labels while preserving existing labels.
 
-If the repo has no GitHub remote yet, run `git init` / `git remote add origin ...` yourself before setup. The pi-main guard allows read-only git commands and tracker writes, not repository initialization.
+If the repo has no GitHub remote yet, configure it yourself or delegate that exact Git operation before setup. The pi-main guard does not allow repository initialization or remote mutation. GitLab has no built-in `glab` provider; use it only through an already configured MCP issue server that exposes the needed tools.
 
 ## Core flow
 
@@ -72,7 +73,7 @@ requirements confirmed
         ↓
 draft spec / tickets
         ↓
-preview + confirmation
+preview + confirmation when not already authorized
         ↓
 publish issue(s)
         ↓
@@ -80,6 +81,8 @@ delegate worker with issue URL
 ```
 
 Small work becomes one issue. Larger work becomes a spec issue plus child tracer-bullet tickets. Wayfinder maps are collapsed into a spec with `to-spec` when the route is clear.
+
+When `ask_user_question` is available, bounded rounds use the structured questionnaire with recommended options. Open-ended questions, rounds with more than three questions, and headless runs fall back to numbered chat.
 
 ## Commands
 
@@ -90,13 +93,17 @@ Small work becomes one issue. Larger work becomes a spec issue plus child tracer
 | `pi-main --continue-from-handoff <topic>` | Pick a handoff by topic fragment |
 | `pi-main --handoff <file>` | Start from an explicit handoff file |
 | `pi-main --list-handoffs` | List handoffs |
+| `pi-main --main-help` | Show launcher help without starting Pi |
+| `PI_MAIN_DRY_RUN=1 pi-main` | Print resolved launch configuration without starting Pi |
 | `/main-status` | Show project, memory, tracker, delegation tools, context usage |
 | `/skill:grilling` | Force the interview skill |
 | `/skill:wayfinder` | Force the Wayfinder flow for a large effort |
 
 ## Context handoff
 
-The main agent monitors context usage and warns at 70% / 85%. When a phase ends or context gets heavy:
+The main agent monitors context usage and warns at 70% / 85%. `--main-help`, `PI_MAIN_DRY_RUN=1`, and `--list-handoffs` are read-only and do not create project snapshots or state files. Automatic handoff selection skips drafts and incomplete handoffs; include substantive **Goal**, **Current state**, and **Next action** sections. Legacy handoffs without status frontmatter remain eligible when those sections are present.
+
+When a phase ends or context gets heavy:
 
 ```text
 /handoff auth-flow
@@ -108,7 +115,7 @@ Then:
 pi-main --continue-from-handoff
 ```
 
-The new session reads the handoff, then the linked issues/ADRs/map, summarizes the state, and waits for confirmation before acting.
+The new session reads the handoff and only the linked issues/ADRs needed for the next action, then summarizes the state. It continues work already authorized in the chat. If the handoff is the only record of authorization, it asks before changing files or delegating; it also asks when a material decision or new authorization is still needed.
 
 ## Memory
 
@@ -128,7 +135,7 @@ Memory is for agent context, **not decisions**. Decisions belong in issues and A
 
 Only `pi-main` loads the memory tools, and the guard blocks its direct `edit`/`write` access to the memory directory. Other processes running as your user can still edit those files; use OS permissions or a container if you need a hard boundary.
 
-In linked Git worktrees, the project root is the main checkout's common `.git` directory. Memory and handoffs are shared across worktrees.
+In linked Git worktrees, planning documents stay in the active worktree. pi-main uses the main checkout root (the parent of the common `.git` directory) for project configuration, memory, and handoffs, so those state files are shared across worktrees. Default memory and handoff files are ignored by Git. If you configure custom memory or handoff directories, add them to `.gitignore` yourself if they should remain untracked; custom paths are not automatically ignored.
 
 ## Tracker configuration
 
@@ -153,23 +160,22 @@ Local markdown fallback:
 }
 ```
 
-Linear/Jira through MCP:
+Linear/Jira through MCP (the server and issue tools must already be configured in Pi):
 
 ```json
 {
   "tracker": {
     "provider": "mcp",
-    "mcpServer": "linear",
-    "allowedTools": ["mcp__linear__*"]
+    "mcpServer": "linear"
   }
 }
 ```
 
-For MCP providers, the lead uses the configured MCP issue tools. The `tracker_*` helper tools return an error explaining that the MCP provider is active.
+Setup persists only `provider`, `localDir`, and `mcpServer` in project config. It does not configure MCP permissions or tool allowlists. For MCP providers, the lead uses available configured MCP issue tools; the built-in `tracker_*` helpers explain that the MCP provider is active.
 
 ## Delegation
 
-No delegation extension is hardcoded. `pi-main` loads your normal global extensions, plus any paths in `extensions`:
+No delegation extension is hardcoded. Orchestration is a lead protocol over an installed executor; pi-main does not provide a built-in scheduler or job engine. It loads your normal global extensions, plus any paths in `extensions`:
 
 ```json
 {
@@ -185,14 +191,14 @@ Examples:
 - outside Herdr: point at `pi-interactive-subagents` or `pi-subagents`
 - or use any extension that exposes a `subagent` / `delegate` tool
 
-If no delegation tool is available, the lead publishes the plan and stops with a handoff instead of pretending to implement.
+If no delegation tool is available, the lead leaves the confirmed plan as a handoff instead of pretending to implement. The package's orchestration protocol covers assignment, concurrency, retry, verification, and resume rules.
 
 ## Guard
 
 Allowed writes:
 
 - `GLOSSARY.md`, `GLOSSARY-MAP.md`
-- `AGENTS.md`, `CLAUDE.md`
+- `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`
 - `docs/**`
 - `.scratch/**`
 - `plans/**`, `specs/**`
@@ -205,6 +211,7 @@ Blocked:
 - `.git`, `node_modules`
 - direct writes to `.pi-main/memory/` (use `memory_*` tools)
 - destructive or write-capable shell commands
+- GitHub tracker writes through the shell; use `tracker_create_issue`, `tracker_comment_issue`, `tracker_close_issue`, or `tracker_configure`
 - arbitrary `gh api`
 
 The guard is a behavioural boundary, not an OS sandbox. A different process running as your user can still edit files directly.

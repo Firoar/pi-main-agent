@@ -4,7 +4,7 @@
 
 Requirements:
 
-- Node.js 22+
+- Node.js 22.19+
 - Pi 1.5+
 - `git`
 - optional: `gh` for the GitHub tracker
@@ -37,8 +37,10 @@ PI_MAIN_DRY_RUN=1 node /path/to/pi-main-agent/bin/pi-main.mjs
 - Keep the launcher opt-in. Do not turn this into a globally installed Pi package that loads the lead prompt and memory into every session.
 - Keep the guard narrow. New allowed write paths or bash commands need a clear justification.
 - Keep project-local config limited to `tracker`, `memory`, and `handoff`.
+- Keep setup aligned with the supported trackers: GitHub, local markdown, and already configured MCP issue servers. Do not add a built-in GitLab CLI workflow or tracker write shell examples.
 - Reference issues/ADRs in memory and handoffs instead of duplicating them.
 - Update `CHANGELOG.md` for user-visible changes.
+- Keep delegation guidance honest: execution requires an installed executor extension; pi-main does not provide a scheduler.
 
 ## Skills
 

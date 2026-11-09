@@ -5,7 +5,6 @@
  * the same config and path rules.
  */
 
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -74,7 +73,10 @@ export const DEFAULT_CONFIG: PiMainConfig = {
       "GLOSSARY.md",
       "GLOSSARY-MAP.md",
       "AGENTS.md",
+      "AGENTS.override.md",
+      "AGENTS.MD",
       "CLAUDE.md",
+      "CLAUDE.MD",
       "docs/**",
       ".scratch/**",
       "plans/**",
@@ -101,23 +103,59 @@ export const DEFAULT_CONFIG: PiMainConfig = {
   thinking: null,
 };
 
+function defaultConfigCopy(): PiMainConfig {
+  return {
+    ...DEFAULT_CONFIG,
+    tracker: { ...DEFAULT_CONFIG.tracker, allowedTools: [...(DEFAULT_CONFIG.tracker.allowedTools ?? [])] },
+    guard: { ...DEFAULT_CONFIG.guard, allowedWritePaths: [...DEFAULT_CONFIG.guard.allowedWritePaths] },
+    memory: { ...DEFAULT_CONFIG.memory },
+    handoff: { ...DEFAULT_CONFIG.handoff },
+    extensions: [...DEFAULT_CONFIG.extensions],
+    skills: [...DEFAULT_CONFIG.skills],
+  };
+}
+
 export function loadConfig(): PiMainConfig {
   const configPath = process.env.PI_MAIN_CONFIG;
-  if (!configPath) return { ...DEFAULT_CONFIG };
-
+  let config = defaultConfigCopy();
   try {
-    const raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as Partial<PiMainConfig>;
-    return {
-      ...DEFAULT_CONFIG,
-      ...raw,
-      tracker: { ...DEFAULT_CONFIG.tracker, ...(raw.tracker ?? {}) },
-      guard: { ...DEFAULT_CONFIG.guard, ...(raw.guard ?? {}) },
-      memory: { ...DEFAULT_CONFIG.memory, ...(raw.memory ?? {}) },
-      handoff: { ...DEFAULT_CONFIG.handoff, ...(raw.handoff ?? {}) },
-    };
-  } catch {
-    return { ...DEFAULT_CONFIG };
+    if (configPath) {
+      const raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as Partial<PiMainConfig>;
+      config = {
+        ...config,
+        ...raw,
+        tracker: { ...config.tracker, ...(raw.tracker ?? {}) },
+        guard: { ...config.guard, ...(raw.guard ?? {}) },
+        memory: { ...config.memory, ...(raw.memory ?? {}) },
+        handoff: { ...config.handoff, ...(raw.handoff ?? {}) },
+      };
+    }
+  } catch (error) {
+    if (configPath) throw new Error(`Could not load trusted pi-main config at ${configPath}: ${(error as Error).message}`);
+    config = defaultConfigCopy();
   }
+  const projectConfigPath = process.env.PI_MAIN_PROJECT_CONFIG;
+  if (!projectConfigPath) return config;
+  try {
+    const raw = JSON.parse(fs.readFileSync(projectConfigPath, "utf8")) as { tracker?: Partial<TrackerConfig> };
+    const tracker = raw.tracker ?? {};
+    const provider = tracker.provider;
+    if (provider !== undefined && !["github", "local", "mcp"].includes(provider)) return config;
+    const nextTracker = { ...config.tracker, provider: provider ?? config.tracker.provider };
+    if (typeof tracker.mcpServer === "string") nextTracker.mcpServer = tracker.mcpServer;
+    if (typeof tracker.localDir === "string") {
+      const root = realpathLoose(projectRoot());
+      const localDir = realpathLoose(resolveProjectPath(tracker.localDir, root));
+      if (!isWithin(root, localDir)) return config;
+      // Preserve the configured path spelling so the tracker layer can still
+      // detect an in-project symlink that resolves somewhere else inside root.
+      nextTracker.localDir = tracker.localDir;
+    }
+    config.tracker = nextTracker;
+  } catch {
+    // A bad project-local preference file cannot invalidate the trusted base config.
+  }
+  return config;
 }
 
 export function projectRoot(): string {
@@ -144,32 +182,6 @@ export function handoffDir(config = loadConfig(), root = projectRoot()): string 
 
 export function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
-}
-
-export function ensureProjectState(config = loadConfig(), root = projectRoot()): void {
-  const state = path.join(root, ".pi-main");
-  ensureDir(state);
-  ensureDir(path.join(state, "memory", "daily"));
-  ensureDir(path.join(state, "memory", "backups"));
-  ensureDir(path.join(state, "tmp"));
-  ensureDir(path.join(state, "handoffs"));
-
-  const gitignore = path.join(state, ".gitignore");
-  if (!fs.existsSync(gitignore)) {
-    fs.writeFileSync(gitignore, "memory/\ntmp/\nhandoffs/\n", "utf8");
-  }
-
-  // Also honor custom directories if the config points elsewhere.
-  ensureDir(memoryDir(config, root));
-  ensureDir(path.join(memoryDir(config, root), "daily"));
-  ensureDir(path.join(memoryDir(config, root), "backups"));
-  ensureDir(handoffDir(config, root));
-}
-
-export function projectSlug(root = projectRoot()): string {
-  const base = path.basename(root).replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "project";
-  const hash = createHash("sha256").update(root).digest("hex").slice(0, 8);
-  return `${base}-${hash}`;
 }
 
 export function nowStamp(date = new Date()): string {
@@ -235,11 +247,26 @@ export function isWithin(parent: string, child: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
-function realpathLoose(target: string): string {
+export function contextUsageBucket(percent: number, warnAt: number, hardWarnAt: number): 0 | 1 | 2 {
+  const fraction = percent / 100;
+  return fraction >= hardWarnAt ? 2 : fraction >= warnAt ? 1 : 0;
+}
+
+export function formatContextPercent(percent: number): string {
+  return `${Math.round(percent)}%`;
+}
+
+export function realpathLoose(target: string): string {
   const absolute = path.resolve(target);
   try {
     return fs.realpathSync.native(absolute);
-  } catch {
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") throw error;
+    let entryExists = false;
+    try { fs.lstatSync(absolute); entryExists = true; }
+    catch (statError) { if ((statError as NodeJS.ErrnoException).code !== "ENOENT") throw statError; }
+    if (entryExists) throw error;
     // For a not-yet-created file, resolve the nearest existing parent.
     const parent = path.dirname(absolute);
     if (parent === absolute) return absolute;
@@ -262,11 +289,32 @@ export function checkWritePath(
 ): WriteCheck {
   const expanded = inputPath === "~" ? os.homedir() : inputPath.startsWith("~/") ? path.join(os.homedir(), inputPath.slice(2)) : inputPath;
   const absolutePath = path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(cwd, expanded);
-  const canonicalRoot = realpathLoose(root);
-  const canonicalTarget = realpathLoose(absolutePath);
-  const relativePath = path.relative(canonicalRoot, canonicalTarget).split(path.sep).join("/");
+  let canonicalRoot: string;
+  let sharedRoot: string;
+  let canonicalTarget: string;
+  try {
+    canonicalRoot = realpathLoose(process.env.PI_MAIN_WORKTREE_ROOT || root);
+    sharedRoot = realpathLoose(root);
+    canonicalTarget = realpathLoose(absolutePath);
+  } catch {
+    return { allowed: false, reason: "Blocked: could not safely resolve the write path.", absolutePath, relativePath: "" };
+  }
+  const inWorktree = isWithin(canonicalRoot, canonicalTarget);
+  let handoffBase: string;
+  let tmpBase: string;
+  try {
+    handoffBase = realpathLoose(handoffDir(config, sharedRoot));
+    tmpBase = realpathLoose(path.join(sharedRoot, ".pi-main", "tmp"));
+  } catch {
+    return { allowed: false, reason: "Blocked: could not safely resolve shared state paths.", absolutePath, relativePath: "" };
+  }
+  const handoffName = path.basename(canonicalTarget);
+  const sharedHandoff = isWithin(sharedRoot, handoffBase) && isWithin(handoffBase, canonicalTarget) &&
+    /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}-.+\.md$/.test(handoffName);
+  const sharedTmp = isWithin(sharedRoot, tmpBase) && isWithin(tmpBase, canonicalTarget);
+  const relativePath = path.relative(inWorktree ? canonicalRoot : sharedRoot, canonicalTarget).split(path.sep).join("/");
 
-  if (!isWithin(canonicalRoot, canonicalTarget)) {
+  if (!inWorktree && !sharedHandoff && !sharedTmp) {
     return {
       allowed: false,
       reason: `Blocked: writes must stay inside the project (${canonicalRoot}).`,
@@ -275,8 +323,14 @@ export function checkWritePath(
     };
   }
 
-  const memory = realpathLoose(memoryDir(config, root));
-  if (isWithin(memory, canonicalTarget)) {
+  let writesToMemory = false;
+  try {
+    const memoryPaths = [memoryDir(config, root), memoryDir(config, canonicalRoot)];
+    writesToMemory = memoryPaths.some((dir) => isWithin(realpathLoose(dir), canonicalTarget));
+  } catch {
+    return { allowed: false, reason: "Blocked: could not safely resolve the memory path.", absolutePath, relativePath };
+  }
+  if (writesToMemory) {
     return {
       allowed: false,
       reason:
@@ -286,7 +340,7 @@ export function checkWritePath(
     };
   }
 
-  if (relativePath === ".git" || relativePath.startsWith(".git/") || relativePath === "node_modules" || relativePath.startsWith("node_modules/")) {
+  if (relativePath.split("/").some((part) => part === ".git" || part === "node_modules")) {
     return {
       allowed: false,
       reason: "Blocked: .git and node_modules are off-limits.",
@@ -295,7 +349,7 @@ export function checkWritePath(
     };
   }
 
-  if (!matchesAnyPath(relativePath, config.guard.allowedWritePaths)) {
+  if (!sharedHandoff && !sharedTmp && !matchesAnyPath(relativePath, config.guard.allowedWritePaths)) {
     return {
       allowed: false,
       reason: [
@@ -312,23 +366,33 @@ export function checkWritePath(
   return { allowed: true, absolutePath, relativePath };
 }
 
-const SHELL_META = /[\n\r;|&<>`]|\$\(/;
-
-function hasAny(args: string[], needles: string[]): boolean {
-  return args.some((arg) => needles.some((needle) => arg === needle || arg.startsWith(`${needle}=`)));
+function shellWords(input: string): string[] | null {
+  const words: string[] = [];
+  let word = "";
+  let quote: "'" | '"' | null = null;
+  for (const ch of input) {
+    if (ch === "\n" || ch === "\r") return null;
+    if (quote === "'") { if (ch === "'") quote = null; else word += ch; }
+    else if (quote === '"') {
+      if (ch === '"') quote = null;
+      else if (/[$\\`]/.test(ch)) return null;
+      else word += ch;
+    }
+    else if (ch === "'" || ch === '"') quote = ch;
+    else if (/\s/.test(ch)) { if (word) words.push(word); word = ""; }
+    else if (/[;|&<>`\\$*?\[\]{}()]/.test(ch)) return null;
+    else word += ch;
+  }
+  if (quote) return null;
+  if (word) words.push(word);
+  return words;
 }
-
+function positionalArgs(args: string[]): string[] { return args.filter((arg) => !arg.startsWith("-")); }
 export function isSafeBashCommand(command: string, config = loadConfig()): { safe: boolean; reason?: string } {
   const trimmed = command.trim();
   if (!trimmed) return { safe: false, reason: "Empty command." };
-  if (SHELL_META.test(trimmed)) {
-    return {
-      safe: false,
-      reason:
-        "Blocked: shell chaining, redirection, pipes, and command substitution are disabled in pi-main.",
-    };
-  }
-  const parts = trimmed.split(/\s+/);
+  const parts = shellWords(trimmed);
+  if (!parts?.length) return { safe: false, reason: "Blocked: shell syntax, expansion, chaining, redirection, and command substitution are disabled in pi-main." };
   const head = parts[0];
   const args = parts.slice(1);
 
@@ -366,7 +430,7 @@ export function isSafeBashCommand(command: string, config = loadConfig()): { saf
 
   if (head === "find") {
     if (
-      hasAny(args, ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls"])
+      args.some((arg) => ["-delete", "-exec", "-execdir", "-ok", "-okdir"].includes(arg) || /^-(?:fprint|fprintf|fls)/.test(arg))
     ) {
       return { safe: false, reason: "Blocked: find may not delete, execute, or write files." };
     }
@@ -374,19 +438,41 @@ export function isSafeBashCommand(command: string, config = loadConfig()): { saf
   }
 
   if (head === "sort") {
-    if (hasAny(args, ["-o", "--output"])) {
+    if (args.some((arg) => arg.startsWith("--o") || arg.startsWith("--comp")) || args.some((arg) => /^-[^-]*o/.test(arg)) || positionalArgs(args).length > 1) {
       return { safe: false, reason: "Blocked: sort may not write output files." };
     }
     return { safe: true };
   }
 
   if (head === "rg") {
-    if (hasAny(args, ["--pre", "--pre-glob"])) {
+    if (args.some((arg) => arg.startsWith("--pre") || arg.startsWith("--hostname-bin"))) {
       return { safe: false, reason: "Blocked: ripgrep preprocessors may execute commands." };
     }
     return { safe: true };
   }
 
+  if (head === "tree") {
+    if (args.some((arg) => arg.startsWith("--o")) || args.some((arg) => /^-[^-]*o/.test(arg)) || positionalArgs(args).length > 1) {
+      return { safe: false, reason: "Blocked: tree may write only to stdout." };
+    }
+    return { safe: true };
+  }
+  if (head === "file") {
+    if (args.some((arg) => arg.startsWith("--comp") || /^-[^-]*C/.test(arg))) return { safe: false, reason: "Blocked: file may not compile or update its magic database." };
+    return { safe: true };
+  }
+  if (head === "date") {
+    const flags = new Set(["-u", "--utc", "--universal", "--rfc-3339", "--iso-8601"]);
+    const safe = args.every((arg) => flags.has(arg) || arg.startsWith("--rfc-3339=") || arg.startsWith("--iso-8601=") || arg.startsWith("+")) &&
+      positionalArgs(args).every((arg) => arg.startsWith("+"));
+    return safe ? { safe: true } : { safe: false, reason: "Blocked: date accepts display-only formats and timezone flags." };
+  }
+
+  if (head === "uniq") {
+    const flags = new Set(["-c", "--count", "-d", "--repeated", "-u", "--unique", "-i", "--ignore-case"]);
+    if (positionalArgs(args).length > 1 || args.some((arg) => arg.startsWith("-") && !flags.has(arg) && !/^-w\d+$/.test(arg))) return { safe: false, reason: "Blocked: uniq may read one input file and write only to stdout." };
+    return { safe: true };
+  }
   if (allowedHeads.has(head)) return { safe: true };
 
   if (head === "git") {
@@ -411,55 +497,30 @@ export function isSafeBashCommand(command: string, config = loadConfig()): { saf
     }
     if (sub === "branch") {
       const branchArgs = args.slice(1);
-      const unsafe = new Set([
-        "-d",
-        "-D",
-        "-m",
-        "-M",
-        "-c",
-        "-C",
-        "-f",
-        "--delete",
-        "--move",
-        "--copy",
-        "--force",
-        "--edit-description",
-        "--set-upstream-to",
-        "--unset-upstream",
-        "--track",
-        "--no-track",
-        "-u",
-        "--create-reflog",
-      ]);
-      if (branchArgs.some((arg) => unsafe.has(arg))) {
-        return { safe: false, reason: "Blocked: git branch may not modify branches." };
-      }
-      // A bare positional argument creates a branch. Allow values consumed by
-      // read-only flags such as --contains/--list/--format.
-      const valueFlags = new Set([
-        "--contains",
-        "--merged",
-        "--no-merged",
-        "--points-at",
-        "--format",
-        "--sort",
-        "--column",
-        "--list",
-        "-l",
-      ]);
+      const valueFlags = new Set(["--contains", "--merged", "--no-merged", "--points-at", "--format", "--sort"]);
+      const readOnlyFlags = new Set(["-a", "--all", "-r", "--remotes", "--list", "-l", "-v", "-vv", "--verbose", "--color", "--no-color", "--show-current", "--ignore-case"]);
+      const listing = branchArgs.includes("--list") || branchArgs.includes("-l");
       for (let i = 0; i < branchArgs.length; i++) {
         const arg = branchArgs[i]!;
-        if (arg.startsWith("-")) {
-          if (valueFlags.has(arg)) i++;
+        if (valueFlags.has(arg)) {
+          if (branchArgs[i + 1] && !branchArgs[i + 1]!.startsWith("-")) i++;
           continue;
         }
-        return { safe: false, reason: "Blocked: git branch positional arguments create branches." };
+        if (arg.startsWith("--format=") || arg.startsWith("--sort=")) continue;
+        if (arg.startsWith("-")) {
+          if (!readOnlyFlags.has(arg)) return { safe: false, reason: "Blocked: git branch accepts read-only list/filter options only." };
+          continue;
+        }
+        if (!listing) return { safe: false, reason: "Blocked: git branch positional arguments create branches." };
       }
     }
-    if (sub === "remote" && hasAny(args, ["add", "remove", "rm", "set-url", "rename", "prune", "update"])) {
-      return { safe: false, reason: "Blocked: git remote may not modify remotes." };
+    if (sub === "remote") {
+      const remoteArgs = args.slice(1);
+      const safeRemote = remoteArgs.length === 0 || (remoteArgs.length === 1 && ["-v", "--verbose"].includes(remoteArgs[0]!)) ||
+        (["show", "get-url"].includes(remoteArgs[0] ?? "") && remoteArgs.length <= 2);
+      if (!safeRemote) return { safe: false, reason: "Blocked: only git remote listing/show/get-url commands are allowed." };
     }
-    if (hasAny(args, ["--output", "-o"])) {
+    if (args.some((arg) => arg.startsWith("--out") || ["--ext-diff", "--textconv", "--open-files-in-pager"].includes(arg) || (sub === "grep" && /^-[^-]*O/.test(arg))) || args.some((arg) => /^-[^-]*o/.test(arg))) {
       return { safe: false, reason: "Blocked: git read commands may not write output files." };
     }
     return { safe: true };
@@ -467,18 +528,18 @@ export function isSafeBashCommand(command: string, config = loadConfig()): { saf
 
   if (head === "npm") {
     const sub = args[0] ?? "";
-    if (["list", "ls", "view", "info", "search", "outdated", "audit"].includes(sub)) return { safe: true };
+    if (["list", "ls", "view", "info", "search", "outdated"].includes(sub)) return { safe: true };
     return { safe: false, reason: `Blocked: npm ${sub || "(none)"} may modify the project.` };
   }
 
   if (head === "yarn" || head === "pnpm") {
     const sub = args[0] ?? "";
-    if (["list", "info", "why", "audit", "outdated"].includes(sub)) return { safe: true };
+    if (["list", "info", "why", "outdated"].includes(sub)) return { safe: true };
     return { safe: false, reason: `Blocked: ${head} ${sub || "(none)"} may modify the project.` };
   }
 
-  if (head === "node" && args[0] === "--version") return { safe: true };
-  if ((head === "python" || head === "python3") && args[0] === "--version") return { safe: true };
+  if (head === "node" && args.length === 1 && args[0] === "--version") return { safe: true };
+  if ((head === "python" || head === "python3") && args.length === 1 && args[0] === "--version") return { safe: true };
 
   if (head === "gh") {
     if (!config.guard.allowGithubTrackerWrites || config.tracker.provider !== "github") {
@@ -487,29 +548,28 @@ export function isSafeBashCommand(command: string, config = loadConfig()): { saf
     const domain = args[0] ?? "";
     const sub = args[1] ?? "";
     if (domain === "issue") {
-      if (["create", "edit", "comment", "close", "reopen", "list", "view", "status"].includes(sub)) {
-        return { safe: true };
-      }
-      return { safe: false, reason: `Blocked: gh issue ${sub || "(none)"} is not allowed.` };
+      if (["list", "view", "status"].includes(sub)) return { safe: true };
+      return {
+        safe: false,
+        reason: `Blocked: gh issue ${sub || "(none)"} writes tracker state. Use tracker_create_issue, tracker_comment_issue, or tracker_close_issue.`,
+      };
     }
     if (domain === "label") {
-      if (["list", "create"].includes(sub)) return { safe: true };
-      return { safe: false, reason: `Blocked: gh label ${sub || "(none)"} is not allowed.` };
+      if (sub === "list") return { safe: true };
+      return { safe: false, reason: "Blocked: label writes go through tracker_configure." };
     }
     if (domain === "repo" && sub === "view") return { safe: true };
     if (domain === "auth" && sub === "status") return { safe: true };
-    return { safe: false, reason: "Blocked: only gh issue/label/repo view/auth status are allowed." };
+    return {
+      safe: false,
+      reason: "Blocked: only read-only gh issue/label/repo/auth commands are allowed through the shell.",
+    };
   }
 
   return {
     safe: false,
     reason: `Blocked: ${head} is not on the pi-main read-only allowlist.`,
   };
-}
-
-export function isTrackerTool(toolName: string, config = loadConfig()): boolean {
-  if (toolName.startsWith("tracker_")) return true;
-  return (config.tracker.allowedTools ?? []).some((pattern) => globToRegExp(pattern).test(toolName));
 }
 
 export function readText(filePath: string, fallback = ""): string {

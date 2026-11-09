@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented here.
 
+## [0.2.0] - 2026-11-09
+
+### Changed
+
+- Clarify supported tracker setup, tracker configuration confirmation, Git boundaries, domain documentation layout, handoff behavior, and the limits of executor-based orchestration.
+- Correct vendored skill guidance to match available tracker operations and avoid nested worker spawning.
+- Record that the vendored baseline's upstream commit was not captured rather than inventing a revision.
+- Add structured `ask_user_question` rounds when available, with numbered chat fallback.
+- Block GitHub tracker writes through the shell; require the `tracker_*` tools.
+
+### Fixed
+
+- Prevent tracker tool patterns from bypassing built-in write and shell guards; reject write-capable shell options and unsafe state paths.
+- Keep planning writes in the active worktree while sharing project memory and handoffs. Make help, listing, and dry-run commands read-only.
+- Persist tracker setup and apply it immediately, bootstrap missing GitHub labels, and use unambiguous local issue paths and canonical status updates.
+- Interpret Pi context usage on its 0–100 scale, inject handoff instructions during tool loops, skip incomplete handoffs, and support explicit handoffs outside the default directory.
+- Exclude backups and unrelated files from memory searches, refresh memory after changes, and avoid backup filename collisions.
+- Isolate test fixtures from the user's Pi configuration and cover launcher, guard, tracker, memory, and worktree regressions.
+
 ## [0.1.0] - 2026-11-09
 
 ### Added

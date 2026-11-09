@@ -7,6 +7,8 @@ description: Build a throwaway prototype to answer a design question. Use when t
 
 A prototype is **throwaway code that answers a question**. The question decides the shape.
 
+These are worker execution instructions for a prototype assignment. Build the assigned artifact yourself; do not spawn or delegate to another worker. Follow the assigned repository and branch/worktree scope. A dispatcher should use the Orchestration protocol from Runtime paths to assign and observe this work.
+
 ## Pick a branch
 
 Identify which question is being answered, using the user's prompt, the surrounding code, or by asking if the user is around:
@@ -23,4 +25,4 @@ The two branches produce very different artifacts, so getting this wrong wastes 
 3. **No persistence by default.** State lives in memory. Persistence is the thing the prototype is _checking_, not something it should depend on. If the question explicitly involves a database, hit a scratch DB or a local file with a clear "PROTOTYPE, wipe me" name.
 4. **Skip the polish.** No tests, no error handling beyond what makes the prototype _runnable_, no abstractions. The point is to learn something fast.
 5. **Surface the state.** After every action (logic) or on every variant switch (UI), print or render the full relevant state so the user can see what changed.
-6. **Capture it when done.** Fold any validated decision into the real code, then capture the prototype itself as a **primary source**: commit it to a throwaway branch, out of main, and leave a context pointer to that branch on the implementation issue. Capture the answer too (the verdict and the question it settled) in the issue or a commit. The main branch keeps only the validated decision.
+6. **Return a reviewable result.** State which question the prototype answers, how to run it, the path changed, what the user should inspect, and what remains undecided. Keep it in the assigned branch/worktree. Do not commit, push, open a PR, or fold it into production code unless the assignment or user explicitly authorized that action. The dispatcher records the user-validated decision in the tracker after review.

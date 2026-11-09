@@ -33,16 +33,16 @@ _Avoid_: Client, buyer, account
 
 **Single context (most repos):** One `GLOSSARY.md` at the repo root.
 
-**Multiple contexts:** A `GLOSSARY-MAP.md` at the repo root lists the contexts, where they live, and how they relate to each other:
+**Multiple contexts:** A `GLOSSARY-MAP.md` at the repo root lists the contexts, where they live, and how they relate to each other. New domain docs use `docs/domains/<context>/`; the map may point to established locations that are being preserved:
 
 ```md
 # Glossary Map
 
 ## Contexts
 
-- [Ordering](./src/ordering/GLOSSARY.md): receives and tracks customer orders
-- [Billing](./src/billing/GLOSSARY.md): generates invoices and processes payments
-- [Fulfillment](./src/fulfillment/GLOSSARY.md): manages warehouse picking and shipping
+- [Ordering](./docs/domains/ordering/GLOSSARY.md): receives and tracks customer orders
+- [Billing](./docs/domains/billing/GLOSSARY.md): generates invoices and processes payments
+- [Fulfillment](./docs/domains/fulfillment/GLOSSARY.md): manages warehouse picking and shipping
 
 ## Relationships
 
@@ -50,6 +50,8 @@ _Avoid_: Client, buyer, account
 - **Fulfillment → Billing**: Fulfillment emits `ShipmentDispatched` events; Billing consumes them to generate invoices
 - **Ordering ↔ Billing**: Shared types for `CustomerId` and `Money`
 ```
+
+When a repo already keeps a context glossary or ADR under another established path (for example `src/ordering/`), leave it there and point the map to that path. Do not copy it into the new layout or overwrite it. Offer a separate, reviewed migration if the user wants consolidation.
 
 The skill infers which structure applies:
 

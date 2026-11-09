@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 Scaffold the per-repo configuration that the engineering skills assume:
 
-- **Issue tracker**: where issues live (GitHub by default; local markdown is also supported out of the box)
+- **Issue tracker**: where issues live (GitHub, local markdown, or a configured MCP server)
 - **Triage labels**: the strings used for the five canonical triage roles
 - **Domain docs**: where `GLOSSARY.md` and ADRs live, and the consumer rules for reading them
 
@@ -21,34 +21,35 @@ This is a prompt-driven skill, not a deterministic script. Explore, present what
 Look at the current repo to understand its starting state. Read whatever exists; don't assume:
 
 - `git remote -v` and `.git/config`: is this a GitHub repo? Which one?
-- `AGENTS.md` and `CLAUDE.md` at the repo root: does either exist? Is there already an `## Agent skills` section in either?
-- `GLOSSARY.md` and `GLOSSARY-MAP.md` at the repo root, and the legacy `CONTEXT.md` / `CONTEXT-MAP.md`. If a legacy file exists, offer to `git mv` it to its `GLOSSARY` name and rewrite those names in `docs/agents/domain.md`.
-- `docs/adr/` and any `src/*/docs/adr/` directories
+- Agent instructions in Pi's precedence order: `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`; find the applicable file and whether it has an `## Agent skills` section.
+- `GLOSSARY.md` and `GLOSSARY-MAP.md` at the repo root, legacy `CONTEXT.md` / `CONTEXT-MAP.md`, and established domain docs. If legacy files exist, report them and offer a migration plan; do not run `git mv` or mutate Git state. Preserve and map established domain docs rather than overwriting them.
+- `docs/adr/`, `docs/domains/`, and established ADR directories, including any `src/*/docs/adr/` directories
 - `docs/agents/`: does this skill's prior output already exist?
 - `.scratch/`: a sign that a local-markdown issue tracker convention is already in use
 - Is the `triage` skill installed? (a `triage` skill folder alongside this one, or `triage` in your available skills.) This decides whether Section B runs at all.
-- Monorepo signals: a `pnpm-workspace.yaml`, a `workspaces` field in `package.json`, or a populated `packages/*` with its own `src/`. These are present only in a genuinely large multi-package repo; their absence means single-context, which is almost every repo.
+- Monorepo signals: a `pnpm-workspace.yaml`, a `workspaces` field in `package.json`, or populated packages with their own source. Treat these as clues, not proof of multiple domain contexts.
 
 ### 2. Present findings and ask
 
 Summarise what's present and what's missing. Then take the sections in order. One section, one answer, then the next.
 
-Lead each section with the recommended answer so the user can accept it in a word. Give a one-line explainer only when the choice genuinely branches; skip the section entirely when exploration already settled it (Section B when `triage` isn't installed, Section C when there's no monorepo).
+Lead each section with the recommended answer so the user can accept it in a word. Give a one-line explainer only when the choice genuinely branches; skip the section entirely when exploration already settled it (Section B when `triage` isn't installed, Section C when a single-context layout is clear and no user choice remains).
 
 **Section A: Issue tracker.**
 
-> Explainer: The "issue tracker" is where issues live for this repo. Skills like `to-tickets`, `triage`, and `to-spec` read from and write to it. They need to know whether to call `gh issue create`, write a markdown file under `.scratch/`, or follow some other workflow you describe. Pick the place you actually track work for this repo.
+> Explainer: The "issue tracker" is where issues live for this repo. Skills like `to-tickets`, `triage`, and `to-spec` need to know whether to use the built-in GitHub or local tracker, or the issue tools exposed by a configured MCP server.
 
-Default posture: these skills were designed for GitHub. If a `git remote` points at GitHub, propose that. If a `git remote` points at GitLab (`gitlab.com` or a self-hosted host), propose GitLab. Otherwise (or if the user prefers), offer:
+Offer only supported choices:
 
-- **GitHub**: issues live in the repo's GitHub Issues (uses the `gh` CLI)
-- **GitLab**: issues live in the repo's GitLab Issues (uses the [`glab`](https://gitlab.com/gitlab-org/cli) CLI)
-- **Local markdown**: issues live as files under `.scratch/<feature>/` in this repo (good for solo projects or repos without a remote)
-- **Other** (Jira, Linear, etc.): ask the user to describe the workflow in one paragraph; the skill will record it as freeform prose
+- **GitHub**: issues live in the repo's GitHub Issues (writes go through the guarded tracker tools)
+- **Local markdown**: issues live as files under `.scratch/<feature>/issues/` in this repo
+- **MCP**: an already-configured MCP issue server such as Linear; record its server name and use its exposed issue tools
 
-Record the choice in `docs/agents/issue-tracker.md`. The GitHub and GitLab templates carry a "PRs as a request surface" flag, defaulted **off**. Leave it off and don't raise it: a user who wants external PRs in the triage queue can flip the flag in the file later.
+If the repo has a GitHub remote, recommend GitHub; otherwise recommend local markdown. A GitLab remote does not make `glab` a supported built-in provider: use GitLab only when the user explicitly chooses an already-configured MCP server for it. Show a concise preview with the selected provider and `localDir` or `mcpServer`, then get user confirmation before changing persistent config or writing setup files. After confirmation, call `tracker_configure` with `{provider: "github"}`, `{provider: "local", localDir: ".scratch"}`, or `{provider: "mcp", mcpServer: "<configured server name>"}`. Never put `allowedTools` in project tracker configuration. The tool writes only the selected tracker fields to project config and bootstraps GitHub's `ready-for-agent` and required Wayfinder labels while preserving existing labels. If the tool fails or explicit `PI_MAIN_CONFIG` prevents this, report its result and stop before writing setup files.
 
-A GitHub or GitLab tracker needs a reachable repo. When the user picks one and no `git remote` points at that host, get the repo URL from them and wire it up (`git init` if needed, `git remote add origin <url>`) before going further. Done when `gh repo view` / `glab repo view` prints the project from inside this directory; if it can't, stop and tell the user what's missing.
+Do not run `git init`, `git remote add`, `git mv`, or other Git state mutations. If a provider is not ready, explain the missing prerequisite and have the user perform it or specifically delegate that repository operation. Proceed only when the selected tracker is usable.
+
+GitHub needs a reachable GitHub repo and authenticated `gh`. Check the repo with the read-only `gh repo view`; if it is not ready, explain that the user must configure it or delegate that operation. An MCP choice requires the named server and suitable issue tools to already be available in Pi. Local markdown needs no remote.
 
 **Section B: Triage label vocabulary.** Skip this section entirely if the `triage` skill isn't installed (exploration told you), since an uninstalled skill needs no labels.
 
@@ -58,28 +59,22 @@ If it is installed, ask exactly one question:
 
 The defaults are the five canonical roles, each label string equal to its name: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. On **yes**, write them as-is. Only if the user says no, usually because their tracker already uses other names (e.g. `bug:triage` for `needs-triage`), collect the overrides so `triage` applies existing labels instead of creating duplicates.
 
-**Section C: Domain docs.** Default to **single-context** (one `GLOSSARY.md` + `docs/adr/` at the repo root). This fits almost every repo; write it without asking.
+**Section C: Domain docs.** Default to **single-context** (one root `GLOSSARY.md` plus system-wide `docs/adr/`) unless a context map or established multi-context docs already exist. New context docs use `docs/domains/<context>/` with `GLOSSARY.md` and `adr/`.
 
-Offer **multi-context** (a root `GLOSSARY-MAP.md` pointing to per-context `GLOSSARY.md` files) only when exploration found monorepo signals. Then confirm which layout they want.
+Offer multi-context only when exploration found multiple bounded contexts or an existing map; monorepo structure is a clue, not a requirement. Preserve established docs in place and point the map at them. Do not move or overwrite them as part of setup.
 
 ### 3. Confirm and edit
 
-Show the user a draft of:
+Show the user a concise draft preview of:
 
-- The `## Agent skills` block to add to whichever of `CLAUDE.md` / `AGENTS.md` is being edited (see step 4 for selection rules)
+- The `## Agent skills` block to add to the first applicable Pi instruction file (see step 4)
 - The contents of `docs/agents/issue-tracker.md`, `docs/agents/domain.md`, and `docs/agents/triage-labels.md` (the last only when `triage` is installed)
 
 Let them edit before writing.
 
 ### 4. Write
 
-**Pick the file to edit:**
-
-- If `CLAUDE.md` exists, edit it.
-- Else if `AGENTS.md` exists, edit it.
-- If neither exists, ask the user which one to create; don't pick for them.
-
-Never create `AGENTS.md` when `CLAUDE.md` already exists (or vice versa); always edit the one that's already there.
+**Pick the applicable file to edit**, in Pi's instruction precedence order: `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, then `CLAUDE.MD`. Edit only the first applicable file. If none exists, create `AGENTS.md`, which Pi loads by default. Preserve all surrounding user content.
 
 If an `## Agent skills` block already exists in the chosen file, update its contents in-place rather than appending a duplicate. Don't overwrite user edits to the surrounding sections.
 
@@ -103,32 +98,19 @@ The block:
 
 Include the `### Triage labels` sub-block, and write `docs/agents/triage-labels.md`, only when `triage` is installed and Section B ran. When it isn't, both are omitted.
 
-When Section B ran on GitHub or GitLab, create each configured label the tracker lacks (`gh label create` / `glab label create`).
+`ready-for-agent` is required for agent-ready work independently of whether the optional `triage` skill is installed. GitHub setup bootstraps that label; local issues receive `Status: ready-for-agent`. For MCP, use a supported matching status/label if one exists; if not, report the limitation and do not claim the tracker marked work ready. Configure other triage-specific labels only when `triage` is installed and Section B ran. Do not create labels with shell commands.
 
 Then write the docs files using the seed templates in this skill folder as a starting point:
 
 - [issue-tracker-github.md](./issue-tracker-github.md): GitHub issue tracker
-- [issue-tracker-gitlab.md](./issue-tracker-gitlab.md): GitLab issue tracker
 - [issue-tracker-local.md](./issue-tracker-local.md): local-markdown issue tracker
 - [triage-labels.md](./triage-labels.md): label mapping (only if `triage` is installed)
 - [domain.md](./domain.md): domain doc consumer rules + layout
 
-For "other" issue trackers, write `docs/agents/issue-tracker.md` from scratch using the user's description.
+For an MCP tracker, write `docs/agents/issue-tracker.md` with the configured server name, exposed issue tools, and tracker-specific conventions the user confirmed. Do not invent tool names.
 
 ### 5. Done
 
 Tell the user the setup is complete and which engineering skills will now read from these files. Mention they can edit `docs/agents/*.md` directly later; re-running this skill is only necessary if they want to switch issue trackers or restart from scratch.
 
-## Wayfinder labels (pi-main addition)
-
-If the `wayfinder` skill is installed and the tracker is GitHub, create the labels it uses if they do not already exist:
-
-```bash
-gh label create wayfinder:map --description "Wayfinder map issue" --color 5319e7
-gh label create wayfinder:research --description "Wayfinder research ticket" --color 0e8a16
-gh label create wayfinder:prototype --description "Wayfinder prototype ticket" --color fbca04
-gh label create wayfinder:grilling --description "Wayfinder grilling ticket" --color 1d76db
-gh label create wayfinder:task --description "Wayfinder task ticket" --color c2e0c6
-```
-
-For the local-markdown tracker, Wayfinder ticket types are recorded in the ticket body instead of labels.
+The GitHub label bootstrap is performed by `tracker_configure`; for local markdown, record issue and Wayfinder types in the issue file.

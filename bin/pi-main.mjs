@@ -18,27 +18,7 @@ import { fileURLToPath } from "node:url";
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CWD = process.cwd();
 
-const DEFAULT_CONFIG = {
-  extensions: [],
-  skills: [
-    "grilling",
-    "domain-modeling",
-    "grill-with-docs",
-    "setup-matt-pocock-skills",
-    "to-spec",
-    "to-tickets",
-    "wayfinder",
-    "research",
-    "prototype",
-    "handoff",
-  ],
-  tracker: { provider: "github", localDir: ".scratch", allowedTools: [] },
-  guard: { bash: "read-only", allowedWritePaths: [] },
-  memory: { dir: ".pi-main/memory" },
-  handoff: { dir: ".pi-main/handoffs", warnAt: 0.7, hardWarnAt: 0.85 },
-  model: null,
-  thinking: null,
-};
+const DEFAULT_CONFIG = JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, "pi-main.config.json"), "utf8"));
 
 function fail(message) {
   console.error(`pi-main: ${message}`);
@@ -58,15 +38,47 @@ function resolveFrom(base, value) {
 
 function readJson(file) {
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("expected a JSON object");
+    return value;
   } catch (error) {
-    if (process.env.PI_MAIN_CONFIG) fail(`cannot read PI_MAIN_CONFIG at ${file}: ${error.message}`);
-    console.error(`pi-main: warning: cannot read ${file}: ${error.message}`);
-    return {};
+    fail(`cannot read config at ${file}: ${error.message}`);
   }
 }
 
+function selectFields(value, keys, label) {
+  if (value === undefined) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail(`${label} must be an object`);
+  return Object.fromEntries(keys.filter((key) => Object.hasOwn(value, key)).map((key) => [key, value[key]]));
+}
+
+function validateConfig(config) {
+  for (const key of ["extensions", "skills"]) {
+    if (!Array.isArray(config[key]) || config[key].some((v) => typeof v !== "string" || !v.trim())) fail(`${key} must be an array of nonempty strings`);
+  }
+  if (!["github", "local", "mcp"].includes(config.tracker.provider)) fail("tracker.provider must be github, local, or mcp");
+  for (const [key, value] of [["memory.dir", config.memory.dir], ["handoff.dir", config.handoff.dir], ["tracker.localDir", config.tracker.localDir]]) {
+    if (typeof value !== "string" || !value.trim()) fail(`${key} must be a nonempty path`);
+  }
+  if (!["off", "read-only", "unrestricted"].includes(config.guard.bash)) fail("guard.bash must be off, read-only, or unrestricted");
+  for (const [key, value] of [["guard.allowedWritePaths", config.guard.allowedWritePaths], ["tracker.allowedTools", config.tracker.allowedTools]]) {
+    if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) fail(`${key} must be an array of strings`);
+  }
+  for (const key of ["allowGithubTrackerWrites", "allowGhApi"]) {
+    if (typeof config.guard[key] !== "boolean") fail(`guard.${key} must be a boolean`);
+  }
+  for (const key of ["maxChars", "dailyMaxChars", "openMaxChars"]) {
+    if (!Number.isInteger(config.memory[key]) || config.memory[key] <= 0) fail(`memory.${key} must be a positive integer`);
+  }
+  const { warnAt, hardWarnAt } = config.handoff;
+  if (!(Number.isFinite(warnAt) && Number.isFinite(hardWarnAt) && warnAt > 0 && warnAt < hardWarnAt && hardWarnAt <= 1)) {
+    fail("handoff thresholds must satisfy 0 < warnAt < hardWarnAt <= 1");
+  }
+  if (config.tracker.mcpServer !== undefined && (typeof config.tracker.mcpServer !== "string" || !config.tracker.mcpServer.trim())) fail("tracker.mcpServer must be a nonempty string");
+}
+
 function mergeConfig(raw) {
+  for (const section of ["tracker", "guard", "memory", "handoff"]) selectFields(raw[section], [], section);
   return {
     ...DEFAULT_CONFIG,
     ...raw,
@@ -84,6 +96,7 @@ function loadConfigFile(root, stateDir) {
     explicit ?? (fs.existsSync(userConfig) ? userConfig : path.join(PACKAGE_ROOT, "pi-main.config.json"));
   const base = readJson(basePath);
   let raw = base;
+  let projectConfigPath;
 
   // A cloned repo may contain a config file. Allow it to choose the tracker,
   // memory location, and handoff location, but never to enable extra
@@ -93,6 +106,8 @@ function loadConfigFile(root, stateDir) {
     const projectConfig = [path.join(root, "pi-main.config.json"), path.join(root, ".pi-main", "config.json")].find(
       (candidate) => fs.existsSync(candidate) && path.resolve(candidate) !== path.resolve(basePath),
     );
+    projectConfigPath = projectConfig ?? path.join(root, ".pi-main", "config.json");
+    assertInsideProject("project config", projectConfigPath, root);
     if (projectConfig) {
       const project = readJson(projectConfig);
       const disallowed = ["extensions", "guard", "skills", "model", "thinking"].filter((key) => key in project);
@@ -101,46 +116,37 @@ function loadConfigFile(root, stateDir) {
           `pi-main: warning: ${path.relative(root, projectConfig)} may only override tracker, memory, and handoff; ignoring ${disallowed.join(", ")}.`,
         );
       }
+      if (project.tracker && Object.hasOwn(project.tracker, "allowedTools")) {
+        console.error("pi-main: warning: repo config cannot set tracker.allowedTools; use trusted user configuration.");
+      }
       raw = {
         ...base,
-        tracker: { ...(base.tracker ?? {}), ...(project.tracker ?? {}) },
-        memory: { ...(base.memory ?? {}), ...(project.memory ?? {}) },
-        handoff: { ...(base.handoff ?? {}), ...(project.handoff ?? {}) },
+        tracker: { ...(base.tracker ?? {}), ...selectFields(project.tracker, ["provider", "localDir", "mcpServer"], "tracker") },
+        memory: { ...(base.memory ?? {}), ...selectFields(project.memory, ["dir", "maxChars", "dailyMaxChars", "openMaxChars"], "memory") },
+        handoff: { ...(base.handoff ?? {}), ...selectFields(project.handoff, ["dir", "warnAt", "hardWarnAt"], "handoff") },
       };
-
-      const insideProject = (value) => {
-        if (!value) return true;
-        const resolved = resolveFrom(root, value);
-        return resolved === root || resolved.startsWith(`${root}${path.sep}`);
-      };
-      if (!insideProject(raw.memory?.dir)) {
-        console.error("pi-main: warning: repo config memory.dir must stay inside the project; using default.");
-        raw.memory = { ...raw.memory, dir: DEFAULT_CONFIG.memory.dir };
-      }
-      if (!insideProject(raw.handoff?.dir)) {
-        console.error("pi-main: warning: repo config handoff.dir must stay inside the project; using default.");
-        raw.handoff = { ...raw.handoff, dir: DEFAULT_CONFIG.handoff.dir };
-      }
-      if (!insideProject(raw.tracker?.localDir)) {
-        console.error("pi-main: warning: repo config tracker.localDir must stay inside the project; using default.");
-        raw.tracker = { ...raw.tracker, localDir: DEFAULT_CONFIG.tracker.localDir };
-      }
     }
   }
 
   const config = mergeConfig(raw);
+  validateConfig(config);
+  assertInsideProject("memory.dir", resolveProjectPath(root, config.memory.dir), root);
+  assertInsideProject("handoff.dir", resolveProjectPath(root, config.handoff.dir), root);
+  assertInsideProject("tracker.localDir", resolveProjectPath(root, config.tracker.localDir), root);
   let configPath = basePath;
 
   // Extensions read PI_MAIN_CONFIG. Write the merged, sanitized config to the
   // per-project state directory so project-level tracker/memory overrides are
   // visible to them without exposing unsafe keys.
   if (!explicit && raw !== base) {
-    fs.mkdirSync(stateDir, { recursive: true });
     configPath = path.join(stateDir, "config.json");
-    fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   }
 
-  return { path: configPath, basePath, config };
+  return { path: configPath, basePath, projectConfigPath, config, needsSnapshot: configPath !== basePath };
+}
+
+function gitWorktreeRoot(cwd) {
+  return fs.realpathSync(spawnSyncText("git", ["rev-parse", "--show-toplevel"], cwd)?.trim() || cwd);
 }
 
 function gitProjectRoot(cwd) {
@@ -152,7 +158,7 @@ function gitProjectRoot(cwd) {
     const resolved = path.resolve(cwd, common.trim());
     // Normal repo: <root>/.git. Linked worktree: <main>/.git.
     if (path.basename(resolved) === ".git") return path.dirname(resolved);
-    return resolved;
+    return gitWorktreeRoot(cwd);
   } catch {
     return cwd;
   }
@@ -173,46 +179,80 @@ function resolveProjectPath(root, value) {
   return resolveFrom(root, value);
 }
 
+function realpathLoose(target) {
+  const absolute = path.resolve(target);
+  try {
+    return fs.realpathSync(absolute);
+  } catch (error) {
+    // Resolve every existing ancestor, even if several intervening directories
+    // have not been created. Do not follow a dangling symlink lexically.
+    if (error.code !== "ENOENT") throw error;
+    if (fs.lstatSync(absolute, { throwIfNoEntry: false })?.isSymbolicLink()) fail(`dangling symlink: ${absolute}`);
+    const parent = path.dirname(absolute);
+    if (parent === absolute) throw error;
+    return path.join(realpathLoose(parent), path.basename(absolute));
+  }
+}
+
 function assertInsideProject(label, target, root) {
   const realRoot = fs.realpathSync(root);
-  let realTarget;
-  try {
-    realTarget = fs.realpathSync(target);
-  } catch {
-    const parent = path.dirname(path.resolve(target));
-    try {
-      realTarget = path.join(fs.realpathSync(parent), path.basename(target));
-    } catch {
-      realTarget = path.resolve(target);
-    }
-  }
+  const realTarget = realpathLoose(target);
   if (realTarget !== realRoot && !realTarget.startsWith(`${realRoot}${path.sep}`)) {
     fail(`${label} resolves outside the project: ${target}`);
+  }
+  if (path.relative(realRoot, realTarget).split(path.sep).some((part) => part === ".git" || part === "node_modules")) {
+    fail(`${label} resolves into a protected .git or node_modules directory: ${target}`);
+  }
+  let current = path.resolve(target);
+  while (current !== path.dirname(current)) {
+    const entry = fs.lstatSync(current, { throwIfNoEntry: false });
+    if (entry?.isSymbolicLink()) {
+      const resolved = realpathLoose(current);
+      if (resolved === realRoot || resolved.startsWith(`${realRoot}${path.sep}`)) {
+        fail(`${label} must not use a symbolic link inside the project: ${current}`);
+      }
+    }
+    if (current === path.resolve(root)) break;
+    current = path.dirname(current);
   }
 }
 
 function ensureProjectState(config, root) {
   const state = path.join(root, ".pi-main");
-  for (const dir of [
+  const memory = resolveProjectPath(root, config.memory.dir);
+  const directories = [
     state,
     path.join(state, "memory", "daily"),
     path.join(state, "memory", "backups"),
     path.join(state, "tmp"),
     path.join(state, "handoffs"),
-  ]) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-
+    path.join(memory, "daily"),
+    path.join(memory, "backups"),
+    resolveProjectPath(root, config.handoff.dir),
+  ];
   const gitignore = path.join(state, ".gitignore");
+  for (const target of [...directories, gitignore]) assertInsideProject("project state", target, root);
+  for (const dir of directories) fs.mkdirSync(dir, { recursive: true });
   if (!fs.existsSync(gitignore)) {
     fs.writeFileSync(gitignore, "memory/\ntmp/\nhandoffs/\n", "utf8");
   }
+}
 
-  // Custom locations from config.
-  const memory = resolveProjectPath(root, config.memory.dir);
-  fs.mkdirSync(path.join(memory, "daily"), { recursive: true });
-  fs.mkdirSync(path.join(memory, "backups"), { recursive: true });
-  fs.mkdirSync(resolveProjectPath(root, config.handoff.dir), { recursive: true });
+function frontmatterValue(content, key) {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);
+  const line = match?.[1].split(/\r?\n/).find((entry) => entry.trim().startsWith(`${key}:`));
+  return line?.slice(line.indexOf(":") + 1).trim().replace(/^["']|["']$/g, "");
+}
+
+function handoffProblem(content) {
+  if (!content.trim()) return "empty handoff";
+  const status = frontmatterValue(content, "status");
+  if (status && status !== "complete") return `handoff status is ${status}, not complete`;
+  for (const section of ["Goal", "Current state", "Next action"]) {
+    const match = new RegExp(`^## ${section}\\s*\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, "m").exec(content);
+    const text = match?.[1].replace(/<!--[\s\S]*?-->/g, "").trim();
+    if (!text || /^(?:TODO|TBD|N\/A|\[.*\]|[-*\s]+)$/i.test(text)) return `missing substantive ${section} section`;
+  }
 }
 
 function listHandoffs(dir) {
@@ -224,38 +264,35 @@ function listHandoffs(dir) {
   }
   return names
     .filter((name) => name.endsWith(".md"))
-    .map((name) => {
+    .flatMap((name) => {
       const file = path.join(dir, name);
-      return { file, name, mtime: fs.statSync(file).mtimeMs };
+      try {
+        if (!fs.lstatSync(file).isFile()) return [];
+        const problem = handoffProblem(fs.readFileSync(file, "utf8"));
+        return [{ file, name, mtime: fs.statSync(file).mtimeMs, problem }];
+      } catch {
+        return [];
+      }
     })
     .sort((a, b) => b.mtime - a.mtime);
 }
 
 function pickHandoff(dir, selector) {
-  const handoffs = listHandoffs(dir);
-  if (!handoffs.length) return undefined;
-  if (!selector) return handoffs[0];
-
-  const expanded = expandHome(selector);
-  if (path.isAbsolute(expanded) || selector.includes("/") || selector.endsWith(".md")) {
+  const expanded = selector ? expandHome(selector) : "";
+  if (selector && (path.isAbsolute(expanded) || selector.includes("/") || selector.endsWith(".md"))) {
     const candidate = path.isAbsolute(expanded) ? expanded : path.resolve(CWD, expanded);
-    return fs.existsSync(candidate)
+    return fs.existsSync(candidate) && fs.statSync(candidate).isFile()
       ? { file: candidate, name: path.basename(candidate), mtime: fs.statSync(candidate).mtimeMs }
       : undefined;
   }
-
+  const handoffs = listHandoffs(dir).filter((entry) => !entry.problem);
+  if (!selector) return handoffs[0];
   const needle = selector.toLowerCase();
   return handoffs.find((entry) => entry.name.toLowerCase().includes(needle));
 }
 
 function frontmatterProject(content) {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);
-  if (!match) return undefined;
-  const line = match[1]
-    .split(/\r?\n/)
-    .find((entry) => entry.trim().startsWith("project:"));
-  if (!line) return undefined;
-  return line.slice(line.indexOf(":") + 1).trim().replace(/^["']|["']$/g, "");
+  return frontmatterValue(content, "project");
 }
 
 function handoffPrompt(file) {
@@ -268,14 +305,14 @@ Handoff file: ${file}
 ${content}
 </handoff>
 
-Read the linked issues, ADRs, spec, and Wayfinder map before acting. Then summarize:
+Read the current issue or Wayfinder map first, then only the linked artifacts needed for the next action. Reconcile active worker identifiers and their latest state before dispatching replacements. Then summarize:
 1. the goal
 2. the current state
 3. decisions already settled
 4. the open frontier
 5. the single next action
 
-Wait for the user to confirm the next action before changing files or delegating work. Do not redo settled work.`;
+Continue work already authorized in this chat. If the handoff is the only record of authorization, ask the user to confirm the next action before changing files or delegating work. Do not redo settled work.`;
 }
 
 function printHelp() {
@@ -376,26 +413,20 @@ function resolveExtension(value, configBase) {
 }
 
 function main() {
-  const root = gitProjectRoot(CWD);
-  const slug = projectSlug(root);
-  const stateDir = path.join(os.homedir(), ".pi/agent/pi-main/projects", slug);
-  const sessionsDir = path.join(stateDir, "sessions");
-  const { path: configPath, basePath, config } = loadConfigFile(root, stateDir);
-  fs.mkdirSync(sessionsDir, { recursive: true });
-  assertInsideProject("memory.dir", resolveProjectPath(root, config.memory.dir), root);
-  assertInsideProject("handoff.dir", resolveProjectPath(root, config.handoff.dir), root);
-  assertInsideProject("tracker.localDir", resolveProjectPath(root, config.tracker.localDir || ".scratch"), root);
-  ensureProjectState(config, root);
-
-  const memory = resolveProjectPath(root, config.memory.dir);
-  const handoffs = resolveProjectPath(root, config.handoff.dir);
   const parsed = parseArgs(process.argv.slice(2));
-
   if (parsed.help) {
     printHelp();
     return;
   }
+  const root = gitProjectRoot(CWD);
+  const worktree = gitWorktreeRoot(CWD);
+  const slug = projectSlug(root);
+  const stateDir = path.join(os.homedir(), ".pi/agent/pi-main/projects", slug);
+  const sessionsDir = path.join(stateDir, "sessions");
+  const { path: configPath, basePath, projectConfigPath, config, needsSnapshot } = loadConfigFile(root, stateDir);
 
+  const memory = resolveProjectPath(root, config.memory.dir);
+  const handoffs = resolveProjectPath(root, config.handoff.dir);
   if (parsed.listHandoffs) {
     const entries = listHandoffs(handoffs);
     if (!entries.length) {
@@ -403,14 +434,19 @@ function main() {
       return;
     }
     for (const entry of entries) {
-      console.log(`${new Date(entry.mtime).toISOString()}  ${path.relative(root, entry.file)}`);
+      console.log(`${new Date(entry.mtime).toISOString()}  ${path.relative(root, entry.file)}${entry.problem ? `  [incomplete: ${entry.problem}]` : ""}`);
     }
     return;
   }
 
   const piArgs = [
     "--append-system-prompt",
-    path.join(PACKAGE_ROOT, "prompts/main-agent.md"),
+    `${fs.readFileSync(path.join(PACKAGE_ROOT, "prompts/main-agent.md"), "utf8")}\n\n## Runtime paths\n\n` +
+      `The active worktree is ${JSON.stringify(worktree)}. Planning documents belong there.\n` +
+      `Shared project state belongs to ${JSON.stringify(root)}.\n` +
+      `Memory directory: ${JSON.stringify(memory)} (use memory tools).\n` +
+      `Handoff directory: ${JSON.stringify(handoffs)}.\n` +
+      `Orchestration protocol path: ${JSON.stringify(path.join(PACKAGE_ROOT, "docs/orchestration.md"))}. Read it before delegating.\n`,
     "--session-dir",
     sessionsDir,
     "-e",
@@ -447,11 +483,12 @@ function main() {
       fail(
         selector
           ? `no handoff matching "${selector}" in ${handoffs}`
-          : `no handoffs found in ${handoffs}. Run /handoff in a pi-main session first.`,
+          : `no complete handoffs found in ${handoffs}. Run /handoff in a pi-main session first.`,
       );
     }
     const content = fs.readFileSync(picked.file, "utf8");
-    if (!content.trim()) fail(`handoff is empty: ${picked.file}`);
+    const problem = handoffProblem(content);
+    if (problem) fail(`cannot resume ${picked.file}: ${problem}`);
     const handoffProject = frontmatterProject(content);
     if (handoffProject && path.resolve(handoffProject) !== path.resolve(root)) {
       console.error(
@@ -469,12 +506,15 @@ function main() {
     PI_MAIN_AGENT: "1",
     PI_MAIN_ROOT: PACKAGE_ROOT,
     PI_MAIN_PROJECT_ROOT: root,
+    PI_MAIN_WORKTREE_ROOT: worktree,
     PI_MAIN_CONFIG: configPath,
     PI_MAIN_STATE_DIR: stateDir,
     PI_MEMORY_DIR: memory,
     PI_MAIN_HANDOFF_DIR: handoffs,
     PI_MAIN_TRACKER_PROVIDER: config.tracker.provider,
   };
+  if (projectConfigPath) env.PI_MAIN_PROJECT_CONFIG = projectConfigPath;
+  else delete env.PI_MAIN_PROJECT_CONFIG;
 
   if (process.env.PI_MAIN_DRY_RUN === "1") {
     console.log(
@@ -482,10 +522,13 @@ function main() {
         {
           command: "pi",
           args: piArgs,
+          config,
           env: {
             PI_MAIN_AGENT: env.PI_MAIN_AGENT,
             PI_MAIN_ROOT: env.PI_MAIN_ROOT,
             PI_MAIN_PROJECT_ROOT: env.PI_MAIN_PROJECT_ROOT,
+            PI_MAIN_WORKTREE_ROOT: env.PI_MAIN_WORKTREE_ROOT,
+            PI_MAIN_PROJECT_CONFIG: env.PI_MAIN_PROJECT_CONFIG,
             PI_MAIN_CONFIG: env.PI_MAIN_CONFIG,
             PI_MAIN_STATE_DIR: env.PI_MAIN_STATE_DIR,
             PI_MEMORY_DIR: env.PI_MEMORY_DIR,
@@ -499,6 +542,9 @@ function main() {
     return;
   }
 
+  ensureProjectState(config, root);
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  if (needsSnapshot) fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   const child = spawn("pi", piArgs, { stdio: "inherit", env });
 
   child.on("error", (error) => {
