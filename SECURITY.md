@@ -19,10 +19,12 @@ Please do not open a public issue for a vulnerability. Include:
 
 - It blocks built-in `edit`/`write` outside planning paths.
 - It restricts `bash` to a read-only allowlist.
+- It blocks GitHub tracker writes through the shell; tracker writes use the `tracker_*` tools.
 - It loads project memory and handoff paths that are private by default.
 - It does not prevent another process running as the same user from editing files.
 - It does not sandbox extensions, MCP servers, or delegation children.
 - Project-local `pi-main.config.json` may only override `tracker`, `memory`, and `handoff`; it cannot add extensions or loosen the guard.
+- Project-local tracker setup writes only `tracker.provider`, `tracker.localDir`, and `tracker.mcpServer`. Tracker tool permissions and MCP availability remain controlled by the user's trusted Pi configuration.
 - Memory and handoff directories must resolve inside the project; symlink escapes are rejected.
 
 Use OS permissions, a dedicated user, or a container if you need a hard security boundary.
@@ -32,6 +34,7 @@ Use OS permissions, a dedicated user, or a container if you need a hard security
 Never commit:
 
 - `.pi-main/` (memory, handoffs, temp issue bodies)
+- `.scratch/` when it contains private local issues or research artifacts
 - API keys, tokens, or `gh` credentials
 - personal `PI_MAIN_CONFIG` files containing private extension paths
 - `node_modules/` or local logs

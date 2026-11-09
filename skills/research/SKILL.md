@@ -1,12 +1,13 @@
 ---
 name: research
-description: Investigate a question against high-trust primary sources and capture the findings as a Markdown file in the repo. Use when the user wants a topic researched, docs or API facts gathered, or reading legwork delegated to a background agent.
+description: Investigate an assigned question against primary sources and return concise, cited findings.
 ---
 
-Spin up a **background agent** to do the research, so you keep working while it reads. Start it with a fresh context window.
+# Research worker instructions
 
-Its job:
+This skill is for the worker assigned a research question. Do the research yourself; never spawn or delegate to another worker.
 
-1. Investigate the question against **primary sources** (official docs, source code, specs, first-party APIs), not a secondary write-up of them. Follow every claim back to the source that owns it.
-2. Write the findings to a single Markdown file, citing each claim's source.
-3. Save it where the repo already keeps such notes; match the existing convention, and if there is none, put it somewhere sensible and say where.
+1. Investigate the assigned question against primary sources: official documentation, source code, standards, specifications, or first-party APIs. Follow each material claim to the source that owns it.
+2. Return a concise finding that answers the assigned question, with links/citations near the claims they support. Separate verified facts from inference and call out any uncertainty that remains.
+3. Respect the assigned repository, branch/worktree, and output path. If the task specifies a Markdown artifact, write one file there and include its path in your result. If no path is specified, return the findings in the executor response instead of inventing a branch, pushing changes, or opening a PR.
+4. Report `complete`, `blocked`, or `failed` and state what evidence or access is missing. Do not answer material user decisions on the user's behalf.

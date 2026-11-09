@@ -18,26 +18,29 @@ Most repos have a single context:
 │   └── adr/
 │       ├── 0001-event-sourced-orders.md
 │       └── 0002-postgres-for-write-model.md
+├── docs/domains/              ← context docs when the repo has multiple contexts
 └── src/
 ```
 
-If a `GLOSSARY-MAP.md` exists at the root, the repo has multiple contexts. The map points to where each one lives:
+If a `GLOSSARY-MAP.md` exists at the root, the repo has multiple contexts. New context docs use `docs/domains/<context>/`; the map points to where each one lives and may preserve established paths elsewhere:
 
 ```
 /
 ├── GLOSSARY-MAP.md
 ├── docs/
 │   └── adr/                          ← system-wide decisions
-├── src/
-│   ├── ordering/
-│   │   ├── GLOSSARY.md
-│   │   └── docs/adr/                 ← context-specific decisions
-│   └── billing/
-│       ├── GLOSSARY.md
-│       └── docs/adr/
+└── docs/domains/
+    ├── ordering/
+    │   ├── GLOSSARY.md
+    │   └── adr/                       ← context-specific decisions
+    └── billing/
+        ├── GLOSSARY.md
+        └── adr/
 ```
 
-Create files lazily: only when you have something to write. If no `GLOSSARY.md` exists, create one when the first term is resolved. If no `docs/adr/` exists, create it when the first ADR is needed.
+Before creating or updating a domain map, look for existing glossaries and ADRs across the repository. Read and preserve established material, point the map to its actual location, and do not copy over it. Moving old docs into `docs/domains/<context>/` is a separate, explicit migration for the user or a delegated worker.
+
+Create files lazily: only when you have something to write. If no `GLOSSARY.md` exists, create one when the first term is resolved. If no relevant ADR directory exists, create it when the first ADR is needed (`docs/adr/` for system-wide, `docs/domains/<context>/adr/` for a context).
 
 ## During the session
 
@@ -57,9 +60,9 @@ When domain relationships are being discussed, stress-test them with specific sc
 
 When the user states how something works, check whether the code agrees. If you find a contradiction, surface it: "Your code cancels entire Orders, but you just said partial cancellation is possible. Which is right?"
 
-### Update GLOSSARY.md inline
+### Update the relevant glossary inline
 
-When a term is resolved, update `GLOSSARY.md` right there. Don't batch these up: capture them as they happen. Use the format in [GLOSSARY-FORMAT.md](./GLOSSARY-FORMAT.md).
+When a term is resolved, update the root `GLOSSARY.md` for a single-context repo or the relevant context glossary named by `GLOSSARY-MAP.md`. Don't batch these up: capture them as they happen. Use the format in [GLOSSARY-FORMAT.md](./GLOSSARY-FORMAT.md).
 
 `GLOSSARY.md` should be totally devoid of implementation details. Do not treat `GLOSSARY.md` as a spec, a scratch pad, or a repository for implementation decisions. It is a glossary and nothing else.
 

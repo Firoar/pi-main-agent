@@ -18,9 +18,10 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import {
   checkWritePath,
+  contextUsageBucket,
+  formatContextPercent,
   handoffDir,
   isSafeBashCommand,
-  isTrackerTool,
   loadConfig,
   memoryDir,
   nowStamp,
@@ -48,8 +49,7 @@ function delegationTools(pi: ExtensionAPI): string[] {
 
 function formatPercent(usage: { percent: number | null; tokens: number | null; contextWindow: number } | undefined): string {
   if (!usage || usage.percent === null || usage.tokens === null) return "unknown";
-  const pct = Math.round(usage.percent * 100);
-  return `${pct}% (${Math.round(usage.tokens / 1000)}k / ${Math.round(usage.contextWindow / 1000)}k)`;
+  return `${formatContextPercent(usage.percent)} (${Math.round(usage.tokens / 1000)}k / ${Math.round(usage.contextWindow / 1000)}k)`;
 }
 
 function slugify(input: string): string {
@@ -67,6 +67,20 @@ function handoffPath(topic: string, config = loadConfig()): string {
   return path.join(dir, `${nowStamp().replace(/[: ]/g, "-")}-${slugify(topic)}.md`);
 }
 
+function uniqueHandoffPath(topic: string, config = loadConfig()): string {
+  const file = handoffPath(topic, config);
+  return fs.existsSync(file) ? file.replace(/\.md$/, `-${Date.now()}.md`) : file;
+}
+
+function validateHandoffPath(file: string, config: ReturnType<typeof loadConfig>, ctx: ExtensionContext): string | null {
+  try {
+    const check = checkWritePath(file, config, projectRoot(), ctx.cwd);
+    return check.allowed ? null : check.reason ?? "Blocked: unsafe handoff location.";
+  } catch {
+    return "Blocked: could not safely validate the handoff path.";
+  }
+}
+
 function handoffSkeleton(topic: string, ctx: ExtensionContext): string {
   const root = projectRoot();
   let session = "";
@@ -79,6 +93,7 @@ function handoffSkeleton(topic: string, ctx: ExtensionContext): string {
 created: "${new Date().toISOString()}"
 project: "${root}"
 session: "${session}"
+status: draft
 ---
 
 # Handoff: ${topic || "planning session"}
@@ -126,7 +141,8 @@ Only what the next agent needs.
 
 Rules:
 - Keep it short and reference durable artifacts instead of duplicating them.
-- Update OPEN.md with unresolved questions that are not already in the issue tracker.
+- Preserve the YAML frontmatter and set status: complete only after every relevant section has useful content. Leave status: draft if the session lacks enough information.
+- Use memory_write with target "open" to record unresolved questions that are not already in the issue tracker.
 - Do not start new work.
 - After writing the file, tell the user to run: pi-main --continue-from-handoff`;
 }
@@ -136,28 +152,36 @@ export default function mainGuard(pi: ExtensionAPI): void {
 
   const config = loadConfig();
   let lastContextBucket = 0;
+  let pendingContextMessage: string | null = null;
 
-  function contextStatus(ctx: ExtensionContext): void {
+  function contextStatus(ctx: ExtensionContext): string | null {
     const usage = ctx.getContextUsage();
     const percent = usage?.percent ?? null;
-    if (percent === null) return;
+    if (percent === null) return null;
 
-    const pct = Math.round(percent * 100);
-    ctx.ui.setStatus("pi-main-context", `ctx ${pct}%`);
+    const pct = Math.round(percent);
+    ctx.ui.setStatus("pi-main-context", `ctx ${formatContextPercent(percent)}`);
 
-    const bucket = percent >= config.handoff.hardWarnAt ? 2 : percent >= config.handoff.warnAt ? 1 : 0;
+    const bucket = contextUsageBucket(percent, config.handoff.warnAt, config.handoff.hardWarnAt);
     if (bucket > lastContextBucket) {
       lastContextBucket = bucket;
       const message =
         bucket === 2
-          ? `Context is ${pct}% full. Run /handoff now, then start a fresh session with pi-main --continue-from-handoff.`
-          : `Context is ${pct}% full. This is a good point to run /handoff before the next phase.`;
+          ? `Context is ${pct}% full. Create a handoff now before continuing.`
+          : `Context is ${pct}% full. Create a handoff before moving into another phase.`;
       if (ctx.hasUI) ctx.ui.notify(message, bucket === 2 ? "warning" : "info");
+      pendingContextMessage = message;
     }
+    if (bucket < lastContextBucket) {
+      lastContextBucket = bucket;
+      pendingContextMessage = null;
+    }
+    return null;
   }
 
   pi.on("session_start", async (_event, ctx) => {
     lastContextBucket = 0;
+    pendingContextMessage = null;
     const root = projectRoot();
     ctx.ui.setStatus(
       "pi-main",
@@ -167,24 +191,49 @@ export default function mainGuard(pi: ExtensionAPI): void {
     contextStatus(ctx);
   });
 
-  // Check before each model request rather than at turn boundaries. This keeps
-  // the context warning out of the turn_end boundary path, which can be
-  // fragile when a command starts a follow-up turn.
-  pi.on("before_agent_start", async (_event, ctx) => {
+  // The context event runs for every model call, including long tool loops.
+  // Inject an ephemeral message without starting a new user turn.
+  pi.on("context", async (event, ctx) => {
     contextStatus(ctx);
+    const message = pendingContextMessage;
+    pendingContextMessage = null;
+    if (!message) return;
+    const topic = "context-handoff";
+    const file = uniqueHandoffPath(topic, config);
+    const blockedReason = validateHandoffPath(file, config, ctx);
+    if (blockedReason) {
+      event.messages.push({
+        role: "custom",
+        customType: "pi-main-context",
+        content: `${message} The configured handoff path was rejected by the path guard (${blockedReason}). Stop expanding work, continue briefly, and tell the user a handoff could not be written safely.`,
+        display: false,
+        timestamp: Date.now(),
+      });
+      return { messages: event.messages };
+    }
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (!fs.existsSync(file)) fs.writeFileSync(file, handoffSkeleton(topic, ctx), "utf8");
+    event.messages.push({
+      role: "custom",
+      customType: "pi-main-context",
+      content: `${message} Complete the current thought briefly, then fill in this handoff file using the write tool: ${file}. Preserve the YAML frontmatter. Keep status: draft until each relevant section has useful content; set status: complete only when the handoff is ready for continuation. Use memory_write with target "open" for unresolved questions not already tracked. Do not start new work.`,
+      display: false,
+      timestamp: Date.now(),
+    });
+    return { messages: event.messages };
   });
 
   pi.on("tool_call", async (event, ctx) => {
-    if (isTrackerTool(event.toolName, config)) return;
-
     if (isToolCallEventType("edit", event) || isToolCallEventType("write", event)) {
-      const inputPath = event.input.path;
+      const inputPath = event.input?.path;
       if (!inputPath || typeof inputPath !== "string") {
         return { block: true, reason: "Blocked: write/edit call has no path." };
       }
-      const check = checkWritePath(inputPath, config, projectRoot(), ctx.cwd);
-      if (!check.allowed) {
-        return { block: true, reason: check.reason ?? "Blocked by pi-main." };
+      try {
+        const check = checkWritePath(inputPath, config, projectRoot(), ctx.cwd);
+        if (!check.allowed) return { block: true, reason: check.reason ?? "Blocked by pi-main." };
+      } catch {
+        return { block: true, reason: "Blocked: could not safely validate the write path." };
       }
       return;
     }
@@ -194,9 +243,14 @@ export default function mainGuard(pi: ExtensionAPI): void {
       if (config.guard.bash === "off") {
         return { block: true, reason: "Blocked: bash is disabled for pi-main." };
       }
-      const result = isSafeBashCommand(event.input.command, config);
-      if (!result.safe) {
-        return { block: true, reason: result.reason ?? "Blocked by pi-main." };
+      if (typeof event.input?.command !== "string") {
+        return { block: true, reason: "Blocked: bash call has no command string." };
+      }
+      try {
+        const result = isSafeBashCommand(event.input.command, { ...config, tracker: loadConfig().tracker });
+        if (!result.safe) return { block: true, reason: result.reason ?? "Blocked by pi-main." };
+      } catch {
+        return { block: true, reason: "Blocked: could not safely validate the bash command." };
       }
       return;
     }
@@ -210,7 +264,12 @@ export default function mainGuard(pi: ExtensionAPI): void {
     description: "Write a handoff file for the next pi-main session",
     handler: async (args, ctx) => {
       const topic = args.trim();
-      const file = handoffPath(topic, config);
+      const file = uniqueHandoffPath(topic, config);
+      const blockedReason = validateHandoffPath(file, config, ctx);
+      if (blockedReason) {
+        ctx.ui.notify(blockedReason, "warning");
+        return;
+      }
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, handoffSkeleton(topic, ctx), "utf8");
       pi.sendUserMessage(handoffPrompt(file, topic));
@@ -221,6 +280,7 @@ export default function mainGuard(pi: ExtensionAPI): void {
     description: "Show pi-main project, memory, tracker, delegation, and context status",
     handler: async (_args, ctx) => {
       const root = projectRoot();
+      const tracker = loadConfig().tracker;
       const usage = ctx.getContextUsage();
       const tools = delegationTools(pi);
       const lines = [
@@ -228,7 +288,7 @@ export default function mainGuard(pi: ExtensionAPI): void {
         `project: ${root}`,
         `memory: ${path.relative(root, memoryDir(config, root)).split(path.sep).join("/")}`,
         `handoffs: ${path.relative(root, handoffDir(config, root)).split(path.sep).join("/")}`,
-        `tracker: ${config.tracker.provider}`,
+        `tracker: ${tracker.provider}${tracker.mcpServer ? ` (${tracker.mcpServer})` : ""}`,
         `model: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown"}`,
         `context: ${formatPercent(usage)}`,
         `delegation: ${tools.length ? tools.join(", ") : "none detected"}`,

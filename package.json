@@ -1,6 +1,6 @@
 {
   "name": "pi-main-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Engineering-lead planning agent launcher for Pi: grilling, issue publishing, delegation, project memory, and session handoffs.",
   "type": "module",
@@ -30,6 +30,7 @@
     "bin",
     "extensions",
     "prompts",
+    "docs",
     "skills",
     "pi-main.config.json",
     "install.sh",
@@ -41,11 +42,11 @@
     "CONTRIBUTING.md"
   ],
   "scripts": {
-    "test": "node --test --experimental-strip-types tests/lib.test.mjs tests/wrapper.test.mjs",
+    "test": "node --test --experimental-strip-types tests/*.test.mjs",
     "smoke": "PI_MAIN_DRY_RUN=1 node bin/pi-main.mjs"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.19"
   },
   "license": "MIT"
 }

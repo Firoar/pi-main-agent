@@ -10,6 +10,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -17,9 +18,11 @@ import { Type } from "typebox";
 import {
   dateStamp,
   ensureDir,
+  isWithin,
   loadConfig,
   memoryDir,
   nowStamp,
+  realpathLoose,
   readText,
   shortSessionId,
   tailLines,
@@ -33,7 +36,30 @@ function isEnabled(): boolean {
 }
 
 function baseDir(): string {
-  return process.env.PI_MEMORY_DIR || memoryDir();
+  return path.resolve(projectRootSafe(), process.env.PI_MEMORY_DIR || memoryDir());
+}
+
+function assertMemoryPath(target: string): void {
+  const root = realpathLoose(projectRootSafe());
+  const configuredRoot = realpathLoose(baseDir());
+  const canonical = realpathLoose(target);
+  if (!isWithin(root, configuredRoot) || !isWithin(configuredRoot, canonical)) {
+    throw new Error(`Memory path escapes its configured project directory: ${target}`);
+  }
+  const sensitive = path.relative(root, canonical).split(path.sep);
+  if (sensitive.some((part) => part === ".git" || part === "node_modules")) {
+    throw new Error(`Memory path may not use .git or node_modules: ${target}`);
+  }
+  const project = path.resolve(projectRootSafe());
+  let current = path.resolve(target);
+  while (isWithin(project, current) && current !== project) {
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) throw new Error(`Memory paths may not use symbolic links: ${current}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    current = path.dirname(current);
+  }
 }
 
 function files() {
@@ -49,15 +75,23 @@ function files() {
 
 function ensureDirs(): ReturnType<typeof files> {
   const f = files();
+  assertMemoryPath(f.dir);
+  assertMemoryPath(f.daily);
+  assertMemoryPath(f.backups);
   ensureDir(f.dir);
   ensureDir(f.daily);
   ensureDir(f.backups);
+  assertMemoryPath(f.dir);
+  assertMemoryPath(f.daily);
+  assertMemoryPath(f.backups);
   return f;
 }
 
 function dailyFile(date = dateStamp()): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`Invalid date: ${date}`);
-  return path.join(baseDir(), "daily", `${date}.md`);
+  const file = path.join(baseDir(), "daily", `${date}.md`);
+  assertMemoryPath(file);
+  return file;
 }
 
 function yesterday(): string {
@@ -70,6 +104,8 @@ function buildSnapshot(): string {
   const config = loadConfig();
   const f = ensureDirs();
 
+  assertMemoryPath(f.memory);
+  assertMemoryPath(f.open);
   const memory = truncate(readText(f.memory), config.memory.maxChars);
   const open = truncate(readText(f.open), config.memory.openMaxChars);
   let daily = "";
@@ -88,7 +124,7 @@ function buildSnapshot(): string {
   return [
     "## Project memory (pi-main)",
     "",
-    "Loaded once at session start. Use memory_read / memory_search for the authoritative latest state.",
+    "Loaded at session start and refreshed after memory writes or removals. Use memory_read / memory_search for the authoritative latest state.",
     "This store is for preferences, project facts, session notes, and pointers to issues/ADRs.",
     "Decisions belong in the issue tracker and ADRs, not here.",
     "",
@@ -111,22 +147,35 @@ function formatEntry(target: MemoryTarget, text: string, tags: string[] | undefi
 function appendEntry(target: MemoryTarget, text: string, tags: string[] | undefined, sid: string): string {
   const f = ensureDirs();
   const file = target === "memory" ? f.memory : target === "open" ? f.open : dailyFile();
+  assertMemoryPath(file);
   if (target !== "memory" && target !== "open") ensureDir(f.daily);
   fs.appendFileSync(file, formatEntry(target, text, tags, sid), "utf8");
   return file;
 }
 
-function searchFallback(query: string, limit: number): string[] {
+function memorySearchTargets(): string[] {
   const f = files();
-  const targets = [f.memory, f.open];
-  try {
-    for (const name of fs.readdirSync(f.daily)) {
-      if (name.endsWith(".md")) targets.push(path.join(f.daily, name));
-    }
-  } catch {
-    // no daily logs yet
+  const targets: string[] = [];
+  for (const file of [f.memory, f.open]) {
+    assertMemoryPath(file);
+    try { if (fs.lstatSync(file).isFile()) targets.push(file); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
+  let dailyNames: string[] = [];
+  try { dailyNames = fs.readdirSync(f.daily); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  for (const name of dailyNames) {
+    if (!name.endsWith(".md")) continue;
+    const file = path.join(f.daily, name);
+    assertMemoryPath(file);
+    try { if (fs.lstatSync(file).isFile()) targets.push(file); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  }
+  return targets;
+}
 
+function searchFallback(query: string, limit: number, targets = memorySearchTargets()): string[] {
+  const f = files();
   const needle = query.toLowerCase();
   const hits: string[] = [];
   for (const file of targets) {
@@ -145,8 +194,10 @@ function searchFallback(query: string, limit: number): string[] {
 function searchMemory(query: string, limit: number): string[] {
   const f = files();
   ensureDirs();
+  const targets = memorySearchTargets();
+  if (!targets.length) return [];
   try {
-    const output = execFileSync("rg", ["-n", "-F", "--no-heading", "-i", "--glob", "*.md", "--", query, f.dir], {
+    const output = execFileSync("rg", ["-n", "-F", "--no-heading", "--with-filename", "-i", "--", query, ...targets], {
       encoding: "utf8",
       timeout: 5000,
     });
@@ -158,7 +209,7 @@ function searchMemory(query: string, limit: number): string[] {
   } catch (error) {
     const code = (error as { status?: number }).status;
     if (code === 1) return []; // no matches
-    return searchFallback(query, limit);
+    return searchFallback(query, limit, targets);
   }
 }
 
@@ -205,6 +256,8 @@ function removeBlocks(content: string, query: string): { content: string; remove
 
 function forget(query: string): { removed: number; backups: string[]; files: string[] } {
   const f = ensureDirs();
+  assertMemoryPath(f.memory);
+  assertMemoryPath(f.open);
   const targets = [f.memory, f.open];
   try {
     for (const name of fs.readdirSync(f.daily)) {
@@ -220,11 +273,13 @@ function forget(query: string): { removed: number; backups: string[]; files: str
   const stamp = nowStamp().replace(/[: ]/g, "-");
 
   for (const file of targets) {
+    assertMemoryPath(file);
     const before = readText(file);
     if (!before.trim()) continue;
     const result = removeBlocks(before, query);
     if (result.removed === 0) continue;
-    const backup = path.join(f.backups, `${stamp}-${path.basename(file)}`);
+    const backup = path.join(f.backups, `${stamp}-${randomUUID()}-${path.basename(file)}`);
+    assertMemoryPath(backup);
     fs.writeFileSync(backup, before, "utf8");
     backups.push(backup);
     fs.writeFileSync(file, result.content, "utf8");
@@ -237,6 +292,8 @@ function forget(query: string): { removed: number; backups: string[]; files: str
 
 function memoryStatus(): string {
   const f = ensureDirs();
+  assertMemoryPath(f.memory);
+  assertMemoryPath(f.open);
   const memory = readText(f.memory);
   const open = readText(f.open);
   const openCount = open.split("\n").filter((line) => /^- \[ \]/.test(line.trim())).length;
@@ -295,6 +352,7 @@ export default function piMemory(pi: ExtensionAPI): void {
         params.tags as string[] | undefined,
         shortSessionId(ctx),
       );
+      snapshot = null;
       return {
         content: [
           {
@@ -322,8 +380,8 @@ export default function piMemory(pi: ExtensionAPI): void {
       const f = ensureDirs();
       const target = (params.target as string | undefined) ?? "all";
       const chunks: string[] = [];
-      if (target === "memory" || target === "all") chunks.push(`### MEMORY.md\n\n${readText(f.memory) || "(empty)"}`);
-      if (target === "open" || target === "all") chunks.push(`### OPEN.md\n\n${readText(f.open) || "(empty)"}`);
+      if (target === "memory" || target === "all") { assertMemoryPath(f.memory); chunks.push(`### MEMORY.md\n\n${readText(f.memory) || "(empty)"}`); }
+      if (target === "open" || target === "all") { assertMemoryPath(f.open); chunks.push(`### OPEN.md\n\n${readText(f.open) || "(empty)"}`); }
       if (target === "daily" || target === "all") {
         const file = dailyFile((params.date as string | undefined) || dateStamp());
         chunks.push(`### ${path.basename(file)}\n\n${readText(file) || "(empty)"}`);

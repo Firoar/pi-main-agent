@@ -10,5 +10,7 @@ The skills under `skills/` are vendored from **mattpocock/skills**:
   - handoff save path changed to `.pi-main/handoffs/`
   - Wayfinder label setup added
 
+The exact upstream commit used for the vendored baseline was not recorded. Future upstream syncs should record the source commit hash and sync date; no revision is inferred here.
+
 The Pi extension API and runtime are from **Pi** / Earendil Inc.:
 https://github.com/earendil-works/pi
