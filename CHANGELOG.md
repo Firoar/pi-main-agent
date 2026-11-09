@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here.
 
+## [0.3.0] - 2026-11-09
+
+### Added
+
+- `pi-main add <source>` for trusted user-config extension management.
+- `pi-main remove <source>` with normalized duplicate/path handling.
+- `pi-main list` for configured extension sources and local availability.
+- `--config <path>` and `--dry-run` for extension commands.
+- Atomic `0600` config writes that preserve unrelated keys.
+
+### Changed
+
+- Extension commands never write project config, the packaged config, or global Pi settings.
+- Local extension sources are canonicalized and must exist; `npm:`, `git:`, and HTTPS sources are validated without execution.
+
 ## [0.2.0] - 2026-11-09
 
 ### Changed

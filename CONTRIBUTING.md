@@ -37,6 +37,7 @@ PI_MAIN_DRY_RUN=1 node /path/to/pi-main-agent/bin/pi-main.mjs
 - Keep the launcher opt-in. Do not turn this into a globally installed Pi package that loads the lead prompt and memory into every session.
 - Keep the guard narrow. New allowed write paths or bash commands need a clear justification.
 - Keep project-local config limited to `tracker`, `memory`, and `handoff`.
+- Keep extension commands (`add`, `remove`, `list`) scoped to trusted user config or an explicit `--config` file. Never let them write project config or run `pi install`.
 - Keep setup aligned with the supported trackers: GitHub, local markdown, and already configured MCP issue servers. Do not add a built-in GitLab CLI workflow or tracker write shell examples.
 - Reference issues/ADRs in memory and handoffs instead of duplicating them.
 - Update `CHANGELOG.md` for user-visible changes.

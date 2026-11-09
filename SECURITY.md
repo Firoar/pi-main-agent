@@ -25,6 +25,7 @@ Please do not open a public issue for a vulnerability. Include:
 - It does not sandbox extensions, MCP servers, or delegation children.
 - Project-local `pi-main.config.json` may only override `tracker`, `memory`, and `handoff`; it cannot add extensions or loosen the guard.
 - Project-local tracker setup writes only `tracker.provider`, `tracker.localDir`, and `tracker.mcpServer`. Tracker tool permissions and MCP availability remain controlled by the user's trusted Pi configuration.
+- `pi-main add` and `remove` edit only the trusted user config or an explicit `--config` file. They do not execute the extension or run `pi install`.
 - Memory and handoff directories must resolve inside the project; symlink escapes are rejected.
 
 Use OS permissions, a dedicated user, or a container if you need a hard security boundary.

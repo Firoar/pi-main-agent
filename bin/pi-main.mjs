@@ -9,7 +9,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -324,6 +324,7 @@ Usage:
   pi-main --handoff <file>
   pi-main --list-handoffs
   pi-main --main-help
+  pi-main add <source> | remove <source> | list
 
 Wrapper options:
   --continue-from-handoff [selector]
@@ -339,10 +340,316 @@ Wrapper options:
 Everything else is passed to pi. The lead prompt, guard, memory, and tracker
 extensions are loaded only for this command.
 
+Extension commands (trusted user config only):
+  pi-main add <source> [--config <path>] [--dry-run]
+      Add a local path, npm: spec, git: spec, or URL to the user config.
+  pi-main remove <source> [--config <path>] [--dry-run]
+      Remove an extension source from the user config.
+  pi-main list [--config <path>]
+      List configured extension sources.
+
+These commands never write project config and never run pi install.
+
 Environment:
-  PI_MAIN_CONFIG          Path to pi-main.config.json
-  PI_MAIN_DRY_RUN=1       Print the resolved command and exit
+  PI_MAIN_CONFIG          Trusted base config path
+  PI_MAIN_DRY_RUN=1       Print the resolved launch command and exit
 `);
+}
+
+function commandUsage(command) {
+  const lines = {
+    add: "Usage: pi-main add <source> [--config <path>] [--dry-run]",
+    remove: "Usage: pi-main remove <source> [--config <path>] [--dry-run]",
+    list: "Usage: pi-main list [--config <path>]",
+  };
+  return lines[command] ?? "Usage: pi-main <add|remove|list> ...";
+}
+
+function isRemoteExtensionSource(source) {
+  return /^(?:npm:|git:|https?:\/\/)/.test(source);
+}
+
+function extensionSourceType(source) {
+  if (source.startsWith("npm:")) return "npm";
+  if (source.startsWith("git:")) return "git";
+  if (/^https?:\/\//.test(source)) return "url";
+  return "local";
+}
+
+function normalizeExtensionSource(source, options = {}) {
+  const requireExists = options.requireExists === true;
+  const trimmed = String(source ?? "").trim();
+  if (!trimmed) fail("extension source is empty");
+  if (trimmed.includes("\0") || /[\r\n]/.test(trimmed)) {
+    fail("extension source must not contain NUL or newline characters");
+  }
+
+  if (isRemoteExtensionSource(trimmed)) {
+    if (/\s/.test(trimmed)) fail(`extension source must not contain whitespace: ${trimmed}`);
+    const prefix = trimmed.slice(0, trimmed.indexOf(":") + 1);
+    if (trimmed.length <= prefix.length) fail(`extension source is missing its target: ${trimmed}`);
+    if (/^https?:\/\//.test(trimmed)) {
+      try {
+        new URL(trimmed);
+      } catch {
+        fail(`invalid extension URL: ${trimmed}`);
+      }
+    }
+    return trimmed;
+  }
+
+  const expanded = expandHome(trimmed);
+  const absolute = path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(CWD, expanded);
+  if (requireExists) {
+    let real;
+    try {
+      real = fs.realpathSync(absolute);
+    } catch {
+      fail(`local extension source does not exist: ${trimmed}`);
+    }
+    let stat;
+    try {
+      stat = fs.statSync(real);
+    } catch (error) {
+      fail(`cannot inspect local extension source ${trimmed}: ${error.message}`);
+    }
+    if (!stat.isFile() && !stat.isDirectory()) {
+      fail(`local extension source must be a file or directory: ${trimmed}`);
+    }
+    return real;
+  }
+
+  try {
+    return fs.realpathSync(absolute);
+  } catch {
+    return absolute;
+  }
+}
+
+function resolveCommandConfigPath(parsed) {
+  const requested = parsed.config ?? process.env.PI_MAIN_CONFIG;
+  if (requested) {
+    const expanded = expandHome(requested);
+    if (expanded.includes("\0") || /[\r\n]/.test(expanded)) fail("config path contains invalid characters");
+    return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(CWD, expanded);
+  }
+  return path.join(os.homedir(), ".config", "pi-main", "config.json");
+}
+
+function readExtensionConfig(file, options = {}) {
+  const mustExist = options.mustExist === true;
+  if (!fs.existsSync(file)) {
+    if (mustExist) fail(`no extension config found at ${file}`);
+    return { exists: false, value: {} };
+  }
+
+  let stat;
+  try {
+    stat = fs.lstatSync(file);
+  } catch (error) {
+    fail(`cannot inspect config ${file}: ${error.message}`);
+  }
+  if (stat.isSymbolicLink()) fail(`config file must not be a symlink: ${file}`);
+  if (!stat.isFile()) fail(`config path is not a file: ${file}`);
+
+  let value;
+  try {
+    value = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (error) {
+    fail(`cannot read config ${file}: ${error.message}`);
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    fail(`config must contain a JSON object: ${file}`);
+  }
+
+  const extensions = value.extensions ?? [];
+  if (
+    !Array.isArray(extensions) ||
+    extensions.some(
+      (entry) => typeof entry !== "string" || !entry.trim() || entry.includes("\0") || /[\r\n]/.test(entry),
+    )
+  ) {
+    fail(`config.extensions must be an array of nonempty strings without control characters: ${file}`);
+  }
+
+  return { exists: true, value: { ...value, extensions: [...extensions] } };
+}
+
+function writeExtensionConfig(file, value) {
+  const dir = path.dirname(file);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (error) {
+    fail(`cannot create config directory ${dir}: ${error.message}`);
+  }
+  if (fs.existsSync(file)) {
+    const stat = fs.lstatSync(file);
+    if (stat.isSymbolicLink()) fail(`config file must not be a symlink: ${file}`);
+    if (!stat.isFile()) fail(`config path is not a file: ${file}`);
+  }
+
+  const temp = path.join(dir, `.${path.basename(file)}.tmp-${process.pid}-${randomUUID()}`);
+  try {
+    fs.writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    const fd = fs.openSync(temp, "r");
+    try {
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(temp, file);
+  } catch (error) {
+    try {
+      fs.unlinkSync(temp);
+    } catch {
+      // temp may not exist
+    }
+    fail(`cannot write config ${file}: ${error.message}`);
+  }
+}
+
+function parseExtensionArgs(argv) {
+  const result = { source: undefined, config: undefined, dryRun: false, help: false, dashDash: false };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (!result.dashDash && arg === "--") {
+      result.dashDash = true;
+      continue;
+    }
+    if (!result.dashDash && (arg === "--help" || arg === "-h")) {
+      result.help = true;
+      continue;
+    }
+    if (!result.dashDash && arg === "--dry-run") {
+      result.dryRun = true;
+      continue;
+    }
+    if (!result.dashDash && arg === "--config") {
+      const next = argv[i + 1];
+      if (!next || !next.trim()) fail("--config requires a non-empty path");
+      result.config = next;
+      i++;
+      continue;
+    }
+    if (!result.dashDash && arg.startsWith("--config=")) {
+      const value = arg.slice("--config=".length);
+      if (!value.trim()) fail("--config requires a non-empty path");
+      result.config = value;
+      continue;
+    }
+    if (!result.dashDash && arg.startsWith("-")) {
+      fail(`unknown option for extension command: ${arg}`);
+    }
+    if (result.source !== undefined) fail(`unexpected extra argument: ${arg}`);
+    result.source = arg;
+  }
+  return result;
+}
+
+function normalizeStoredSource(source) {
+  try {
+    return normalizeExtensionSource(source, { requireExists: false });
+  } catch {
+    return source;
+  }
+}
+
+function handleExtensionAdd(args) {
+  const parsed = parseExtensionArgs(args);
+  if (parsed.help) {
+    console.log(commandUsage("add"));
+    return;
+  }
+  if (!parsed.source) fail(commandUsage("add"));
+  const file = resolveCommandConfigPath(parsed);
+  const config = readExtensionConfig(file);
+  const normalized = normalizeExtensionSource(parsed.source, { requireExists: true });
+  const extensions = config.value.extensions ?? [];
+
+  if (extensions.some((entry) => normalizeStoredSource(entry) === normalized)) {
+    console.log(`Already configured: ${normalized}`);
+    return;
+  }
+
+  const next = { ...config.value, extensions: [...extensions, normalized] };
+  if (parsed.dryRun) {
+    console.log(JSON.stringify({ config: file, value: next }, null, 2));
+    return;
+  }
+  writeExtensionConfig(file, next);
+  console.log(`Added: ${normalized}`);
+  console.log(`Config: ${file}`);
+}
+
+function handleExtensionRemove(args) {
+  const parsed = parseExtensionArgs(args);
+  if (parsed.help) {
+    console.log(commandUsage("remove"));
+    return;
+  }
+  if (!parsed.source) fail(commandUsage("remove"));
+  const file = resolveCommandConfigPath(parsed);
+  const config = readExtensionConfig(file, { mustExist: true });
+  const normalized = normalizeExtensionSource(parsed.source, { requireExists: false });
+  const extensions = config.value.extensions ?? [];
+  const matches = extensions.filter((entry) => normalizeStoredSource(entry) === normalized);
+  if (matches.length === 0) fail(`extension is not configured: ${parsed.source}`);
+
+  const next = {
+    ...config.value,
+    extensions: extensions.filter((entry) => normalizeStoredSource(entry) !== normalized),
+  };
+  if (parsed.dryRun) {
+    console.log(JSON.stringify({ config: file, value: next }, null, 2));
+    return;
+  }
+  writeExtensionConfig(file, next);
+  console.log(`Removed: ${normalized}`);
+  console.log(`Config: ${file}`);
+}
+
+function handleExtensionList(args) {
+  const parsed = parseExtensionArgs(args);
+  if (parsed.help) {
+    console.log(commandUsage("list"));
+    return;
+  }
+  if (parsed.source) fail(`unexpected argument: ${parsed.source}`);
+  if (parsed.dryRun) fail("--dry-run is not supported by pi-main list");
+  const file = resolveCommandConfigPath(parsed);
+  const config = readExtensionConfig(file);
+  console.log(`Config: ${file}${config.exists ? "" : " (not created)"}`);
+  const extensions = config.value.extensions ?? [];
+  if (extensions.length === 0) {
+    console.log("No extensions configured.");
+    return;
+  }
+  for (const source of extensions) {
+    const type = extensionSourceType(source);
+    let status = "";
+    if (type === "local") {
+      const normalized = normalizeExtensionSource(source, { requireExists: false });
+      let exists = false;
+      try {
+        exists = fs.statSync(normalized).isFile() || fs.statSync(normalized).isDirectory();
+      } catch {
+        exists = false;
+      }
+      status = exists ? ", exists" : ", missing";
+    }
+    console.log(`- ${source} [${type}${status}]`);
+  }
+}
+
+function handleExtensionCommand(command, args) {
+  if (command === "add") return handleExtensionAdd(args);
+  if (command === "remove") return handleExtensionRemove(args);
+  if (command === "list") return handleExtensionList(args);
+  fail(`unknown extension command: ${command}`);
 }
 
 function parseArgs(argv) {
@@ -413,7 +720,13 @@ function resolveExtension(value, configBase) {
 }
 
 function main() {
-  const parsed = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  if (["add", "remove", "list"].includes(argv[0])) {
+    handleExtensionCommand(argv[0], argv.slice(1));
+    return;
+  }
+
+  const parsed = parseArgs(argv);
   if (parsed.help) {
     printHelp();
     return;
