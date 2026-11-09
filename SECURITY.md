@@ -21,6 +21,7 @@ Please do not open a public issue for a vulnerability. Include:
 - It restricts `bash` to a read-only allowlist.
 - It blocks GitHub tracker writes through the shell; tracker writes use the `tracker_*` tools.
 - It loads project memory and handoff paths that are private by default.
+- The guard, memory, and tracker extensions disable themselves when `PI_SUBAGENT_ID` is set, so delegated child sessions do not inherit parent commands or planning-state tools even if the extensions are installed globally.
 - It does not prevent another process running as the same user from editing files.
 - It does not sandbox extensions, MCP servers, or delegation children.
 - Project-local `pi-main.config.json` may only override `tracker`, `memory`, and `handoff`; it cannot add extensions or loosen the guard.

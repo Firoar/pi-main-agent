@@ -145,6 +145,8 @@ Behavior:
 
 Do not add `pi-personal-herdr-agents` to a repo config. Extension paths are trusted user configuration so a cloned repo cannot inject code.
 
+`pi-main add` affects the parent session only. For Herdr team roles and skills in child sessions, install the package with `pi install -l` as described under [Delegation](#delegation).
+
 ## Context handoff
 
 The main agent monitors context usage and warns at 70% / 85%. `--main-help`, `PI_MAIN_DRY_RUN=1`, and `--list-handoffs` are read-only and do not create project snapshots or state files. Automatic handoff selection skips drafts and incomplete handoffs; include substantive **Goal**, **Current state**, and **Next action** sections. Legacy handoffs without status frontmatter remain eligible when those sections are present.
@@ -235,7 +237,18 @@ Examples:
 
 Do not load two subagent extensions at once; they register the same `subagent` tool.
 
-If no delegation tool is available, the lead leaves the confirmed plan as a handoff instead of pretending to implement. The package's orchestration protocol covers assignment, concurrency, retry, verification, and resume rules.
+For the bundled Herdr team and child roles/skills, install the personal package where both parent and child Pi sessions load it:
+
+```bash
+cd your-project
+pi install -l /home/drc_xor/Desktop/code/pi-personal-herdr-agents
+```
+
+`pi-main add` only loads the host extension in the parent session; it does not install team roles and skills into child sessions. Do not install both the personal fork and the upstream package.
+
+If no delegation tool is available, use `tool_search` for the executor before concluding it is missing. The lead leaves the confirmed plan as a handoff instead of pretending to implement. The package’s orchestration protocol covers assignment, concurrency, retry, verification, and resume rules.
+
+Parent guard, memory, and tracker tools disable themselves in `PI_SUBAGENT_ID` child contexts, even if the extensions are installed globally.
 
 ## Guard
 
@@ -292,6 +305,12 @@ Main keys:
 - The guard prevents accidental source edits, not a determined same-user process.
 - The vendored Matt Pocock skills are MIT; see `skills/LICENSE`.
 
+## Pi Herdr Agents compatibility
+
+Install the personal fork as a Pi package in the configuration used by parent and child Pi sessions, then run `pi-main` inside Herdr. `/main-status` includes delegation tools available through active `tool_search` and labels them deferred. The planning guard, shared-memory tools, and tracker tools are parent-only and stay disabled in delegated child sessions, even if their extensions are loaded.
+
+See [the compatibility notes](docs/herdr-compatibility.md) and [the delegation protocol](docs/orchestration.md#pi-herdr-agents) for worktree briefs, automatic results, persistent seniors, and handoff limits.
+
 ## Links
 
 - Repository: https://github.com/Firoar/pi-main-agent
@@ -299,3 +318,4 @@ Main keys:
 - Security: https://github.com/Firoar/pi-main-agent/security/advisories/new
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Herdr compatibility: [docs/herdr-compatibility.md](docs/herdr-compatibility.md)

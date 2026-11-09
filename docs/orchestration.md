@@ -5,7 +5,7 @@ This is a small operating protocol for the engineering lead, not a built-in sche
 ## Before delegation
 
 1. Check `tracker_status` and confirm the configured tracker can represent the work. For MCP, inspect the configured server's actual tools; do not infer capabilities from its name.
-2. Confirm a delegation tool is available. If it is not, leave the confirmed plan as a handoff.
+2. Confirm a delegation tool is available. If Pi exposes `tool_search`, search for the executor (for Herdr, `subagent` and `subagents_list`) before concluding it is missing. `/main-status` labels searchable deferred tools without activating them. If it is not, leave the confirmed plan as a handoff.
 3. Keep the tracker as the source of truth. Use one issue per independently verifiable slice, with explicit acceptance criteria and dependencies. Select only tickets whose blockers are resolved.
 4. Do not delegate a ticket that still contains a material user decision. Ask the user, or mark the issue blocked with the unanswered question.
 
@@ -42,3 +42,27 @@ Close an issue only after its acceptance criteria are verified and only when tra
 For blocked, failed, timed-out, cancelled, or interrupted work, preserve the tracker issue and record the state in the handoff: worker/executor reference, branch or worktree, last observed result, retry count, blocker, and next action. Release a claim with a tracker comment when authorized, including the outcome and timestamp. Do not start a replacement worker until checking the latest claim/release comments and whether the prior worker is still active. On resume, inspect those active references first and continue or cancel only through supported executor operations.
 
 Tracker comments, issue edits, and notifications are external writes. Use them only when the user explicitly requested that tracker action or authorized it as part of the confirmed workflow. Deliver ordinary worker progress in the executor response; do not contact people through email, chat, or other messaging tools without explicit authorization.
+
+## Pi Herdr Agents
+
+Install the personal `pi-herdr-agents` checkout as a Pi package available to both
+parent and children, and start `pi-main` inside Herdr. Adding only the host file
+to this launcher's `extensions` does not install the team roles and skills in
+child sessions. Do not install both the personal fork and the upstream package.
+
+For the bundled team, launch `team-senior` with `persistent: true`, the source
+repository's absolute `cwd`, a unique worktree branch, and the confirmed issue
+criteria copied into the brief. Untracked `.scratch` tickets and planning files
+are not copied into a new worktree. The default team models are pinned; pass
+explicit authenticated model/thinking overrides when needed.
+
+A `started` response only acknowledges acquisition. Results arrive automatically;
+do not poll or tail session files. Answer a senior's `caller_ping` with
+`subagent_send`, and use `subagent_stop` when the persistent senior is no longer
+needed. Successful senior tasks call `subagent_done` and remain available. The
+team does not push, create PRs, merge, or update the tracker.
+
+Keep this parent process alive until results arrive. A fresh pi-main handoff does
+not adopt an earlier process's live supervisors. Record outstanding run and
+worktree references in the handoff before leaving. The pi-main guard, memory,
+and tracker extensions disable themselves in `PI_SUBAGENT_ID` child contexts.

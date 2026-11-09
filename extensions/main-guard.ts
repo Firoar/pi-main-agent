@@ -29,21 +29,24 @@ import {
 } from "./lib.ts";
 
 function isEnabled(): boolean {
-  return process.env.PI_MAIN_AGENT === "1";
+  // These extensions belong to the planning parent, even if its environment
+  // or globally installed extensions are inherited by a delegated Pi process.
+  return process.env.PI_MAIN_AGENT === "1" && !process.env.PI_SUBAGENT_ID;
 }
 
 function delegationTools(pi: ExtensionAPI): string[] {
   const active = new Set(pi.getActiveTools());
   return pi
     .getAllTools()
-    .map((tool) => tool.name)
     .filter(
-      (name) =>
-        active.has(name) &&
+      ({ name, exposure }) =>
+        exposure !== "hidden" &&
+        (active.has(name) || (exposure === "deferred" && active.has("tool_search"))) &&
         !name.startsWith("memory_") &&
         !name.startsWith("tracker_") &&
         /(^|_)(subagent|delegate|agent|task)/i.test(name),
     )
+    .map(({ name }) => (active.has(name) ? name : `${name} (deferred; load with tool_search)`))
     .sort();
 }
 

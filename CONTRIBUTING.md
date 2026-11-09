@@ -38,6 +38,7 @@ PI_MAIN_DRY_RUN=1 node /path/to/pi-main-agent/bin/pi-main.mjs
 - Keep the guard narrow. New allowed write paths or bash commands need a clear justification.
 - Keep project-local config limited to `tracker`, `memory`, and `handoff`.
 - Keep extension commands (`add`, `remove`, `list`) scoped to trusted user config or an explicit `--config` file. Never let them write project config or run `pi install`.
+- Parent-only extensions must gate registration on `PI_MAIN_AGENT=1` and no `PI_SUBAGENT_ID`; add a child no-registration test when touching them.
 - Keep setup aligned with the supported trackers: GitHub, local markdown, and already configured MCP issue servers. Do not add a built-in GitLab CLI workflow or tracker write shell examples.
 - Reference issues/ADRs in memory and handoffs instead of duplicating them.
 - Update `CHANGELOG.md` for user-visible changes.

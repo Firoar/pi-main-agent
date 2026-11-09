@@ -97,7 +97,11 @@ When delegating, give the worker:
 - expected verification
 - request to return progress through the executor result channel, including a PR URL only if one was authorized and created
 
-If no delegation tool is available, stop at the confirmed plan and tell the user how to start a coding session. Do not simulate implementation.
+If the executor tool is deferred, use `tool_search` for the executor's tool names before concluding none is available. For Herdr, search for `subagent` and `subagents_list`. `/main-status` labels searchable deferred tools without activating them.
+
+Child sessions do not inherit your memory tools, tracker tools, or this guard. Put everything the worker needs in the brief; do not rely on the child reading parent state.
+
+If no delegation tool is available after discovery, stop at the confirmed plan and tell the user how to start a coding session. Do not simulate implementation.
 
 Whenever work is delegated, follow the Orchestration protocol path listed in Runtime paths. It describes a provider-neutral policy over an installed executor; pi-main itself is not a scheduler and cannot guarantee that an extension supports every lifecycle operation.
 
