@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [0.3.1] - 2026-11-10
+
+### Added
+
+- Pi Herdr Agents parent/child compatibility notes and delegation protocol.
+- `/main-status` lists searchable deferred delegation tools with a `tool_search` hint.
+- `PI_SUBAGENT_ID` isolation tests for guard, memory, and tracker extensions.
+
+### Changed
+
+- Guard, memory, and tracker extensions register only in the planning parent (`PI_MAIN_AGENT=1` and no `PI_SUBAGENT_ID`).
+- Herdr setup guidance now distinguishes parent-only `pi-main add` from package installation for child roles and skills.
+
 ## [0.3.0] - 2026-11-09
 
 ### Added

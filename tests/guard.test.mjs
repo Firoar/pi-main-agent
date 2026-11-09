@@ -6,7 +6,7 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { contextUsageBucket, formatContextPercent } from "../extensions/lib.ts";
 
-const PI_ENV = ["PI_MAIN_AGENT", "PI_MAIN_PROJECT_ROOT", "PI_MAIN_PROJECT_CONFIG", "PI_MAIN_CONFIG", "PI_MAIN_WORKTREE_ROOT"];
+const PI_ENV = ["PI_SUBAGENT_ID", "PI_MAIN_AGENT", "PI_MAIN_PROJECT_ROOT", "PI_MAIN_PROJECT_CONFIG", "PI_MAIN_CONFIG", "PI_MAIN_WORKTREE_ROOT"];
 
 function makeTempDir(t, prefix) {
   const tmp = fs.realpathSync.native(os.tmpdir());
@@ -102,4 +102,58 @@ test("context guard injects an actionable custom message and creates a draft han
   const files = fs.readdirSync(path.join(root, ".pi-main", "handoffs"));
   assert.equal(files.length, 1);
   assert.match(fs.readFileSync(path.join(root, ".pi-main", "handoffs", files[0]), "utf8"), /status: draft/);
+});
+
+test("main-status reports searchable deferred delegation without activating tools", async (t) => {
+  isolatePiEnv(t);
+  const root = makeTempDir(t, "pi-main-deferred-");
+  process.env.PI_MAIN_AGENT = "1";
+  process.env.PI_MAIN_PROJECT_ROOT = root;
+  const commands = new Map();
+  const notifications = [];
+  let active = ["read", "tool_search", "subagent_send"];
+  const pi = {
+    on() {},
+    registerCommand: (name, command) => commands.set(name, command),
+    getActiveTools: () => active,
+    getAllTools: () => [
+      { name: "subagent", exposure: "deferred" },
+      { name: "subagent_send", exposure: "direct" },
+      { name: "subagent_hidden", exposure: "hidden" },
+      { name: "subagent_inactive", exposure: "direct" },
+      { name: "memory_task", exposure: "deferred" },
+      { name: "tracker_task", exposure: "deferred" },
+    ],
+    setActiveTools() {
+      assert.fail("status must not change tool policy");
+    },
+  };
+  (await loadGuardModule(t))(pi);
+  const ctx = {
+    model: undefined,
+    getContextUsage: () => undefined,
+    ui: { notify: (message) => notifications.push(message) },
+  };
+  await commands.get("main-status").handler("", ctx);
+  assert.match(
+    notifications.pop(),
+    /delegation: subagent \(deferred; load with tool_search\), subagent_send\n/,
+  );
+  active = ["read", "subagent_send"];
+  await commands.get("main-status").handler("", ctx);
+  assert.match(notifications.pop(), /delegation: subagent_send\n/);
+});
+
+test("the planning guard does not register in a delegated child", async (t) => {
+  isolatePiEnv(t);
+  process.env.PI_MAIN_AGENT = "1";
+  process.env.PI_SUBAGENT_ID = "worker-1";
+  (await loadGuardModule(t))({
+    on() {
+      assert.fail("child inherited parent event handler");
+    },
+    registerCommand() {
+      assert.fail("child inherited parent command");
+    },
+  });
 });

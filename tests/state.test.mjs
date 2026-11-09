@@ -147,3 +147,15 @@ test("memory search excludes backups after forget and rejects paths outside the 
   await assert.rejects(callTool(tools, "memory_write", { target: "memory", text: "escape" }), /escapes its configured project directory/);
   delete process.env.PI_MEMORY_DIR;
 });
+
+for (const name of ["pi-memory", "tracker"]) {
+  test(`${name} does not expose parent state tools in delegated children`, async (t) => {
+    const root = fixture(t);
+    process.env.PI_SUBAGENT_ID = "worker-1";
+    const extension = await loadExtension(name, root);
+    const events = {};
+    const { tools } = register(extension, events);
+    assert.equal(tools.size, 0);
+    assert.deepEqual(Object.keys(events), []);
+  });
+}

@@ -32,7 +32,9 @@ import {
 type MemoryTarget = "memory" | "open" | "daily";
 
 function isEnabled(): boolean {
-  return process.env.PI_MAIN_AGENT === "1";
+  // These extensions belong to the planning parent, even if its environment
+  // or globally installed extensions are inherited by a delegated Pi process.
+  return process.env.PI_MAIN_AGENT === "1" && !process.env.PI_SUBAGENT_ID;
 }
 
 function baseDir(): string {

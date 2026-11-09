@@ -19,7 +19,7 @@ export async function loadExtension(name, root) {
 
 export function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-main-state-")));
-  const keys = ["PI_MAIN_PROJECT_ROOT", "PI_MAIN_WORKTREE_ROOT", "PI_MAIN_AGENT", "PI_MAIN_PROJECT_CONFIG", "PI_MEMORY_DIR", "PI_MAIN_CONFIG", "PATH", "GH_LABEL_LOG"];
+  const keys = ["PI_SUBAGENT_ID", "PI_MAIN_PROJECT_ROOT", "PI_MAIN_WORKTREE_ROOT", "PI_MAIN_AGENT", "PI_MAIN_PROJECT_CONFIG", "PI_MEMORY_DIR", "PI_MAIN_CONFIG", "PATH", "GH_LABEL_LOG"];
   const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   t.after(() => {
     for (const key of keys) {
@@ -33,6 +33,7 @@ export function fixture(t) {
   process.env.PI_MAIN_AGENT = "1";
   delete process.env.PI_MAIN_PROJECT_CONFIG;
   delete process.env.PI_MEMORY_DIR;
+  delete process.env.PI_SUBAGENT_ID;
   process.env.PI_MAIN_CONFIG = path.join(root, "config.json");
   fs.writeFileSync(process.env.PI_MAIN_CONFIG, JSON.stringify({
     tracker: { provider: "local", localDir: ".scratch" },
